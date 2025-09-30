@@ -4,7 +4,6 @@ import time
 from typing import List, Dict, Any, Tuple
 from plexapi.myplex import MyPlexAccount
 from utilities.settings import get_setting
-from queues.config_manager import load_config
 from .plex_token_manager import update_token_status
 from utilities.plex_watchlist import PlexDetailCache, apply_patches
 from utilities.plex_watchlist.processor import WatchlistProcessor
@@ -250,6 +249,9 @@ def get_wanted_from_other_plex_watchlist(
 
 def validate_plex_tokens():
     """Validate all Plex tokens and return their status."""
+
+    from queues.config_manager import load_config
+
     overall_start_time = time.time()
     token_status = {}
 
