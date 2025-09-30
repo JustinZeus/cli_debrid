@@ -105,7 +105,6 @@ from utilities.settings import get_setting
 from database.database_reading import get_media_item_presence
 from queues.config_manager import load_config
 from cli_battery.app.trakt_metadata import TraktMetadata
-from cli_battery.app.direct_api import DirectAPI
 import os
 import pickle
 from datetime import datetime, timedelta
@@ -118,6 +117,8 @@ from utilities.watchlist import (
     PlexDetailCache,
     fetch_item_details_and_extract_ids,
     run_async_fetches,
+    tmdb_to_imdb,
+    WatchlistFetchCoordinator,
 )
 
 # Get db_content directory from environment variable with fallback
@@ -258,85 +259,17 @@ def get_wanted_from_plex_watchlist(
 
         # Initialize the detail cache
         detail_cache = PlexDetailCache(DETAIL_CACHE_FILE, max_age_days=30)
-        cache_stats_before = detail_cache.stats()
+        coordinator = WatchlistFetchCoordinator(detail_cache)
 
-        items_to_process_async = []
-        cached_items = []
-
-        for item_obj in initial_watchlist:
-            # Check cache first
-            cached_details = detail_cache.get(item_obj)
-            if cached_details:
-                # Reconstruct the expected format from cache
-                cached_items.append(
-                    {
-                        "imdb_id": cached_details.get("imdb_id"),
-                        "tmdb_id": cached_details.get("tmdb_id"),
-                        "media_type": cached_details.get("media_type"),
-                        "original_plex_item": item_obj,
-                        "error": cached_details.get("error"),
-                    }
-                )
-            else:
-                # Need to fetch this item
-                if (
-                    hasattr(item_obj, "key")
-                    and item_obj.key
-                    and hasattr(item_obj, "_server")
-                ):
-                    try:
-                        details_url = item_obj._server.url(item_obj.key)
-                        items_to_process_async.append(
-                            {
-                                "title": item_obj.title,
-                                "url": details_url,
-                                "original_plex_item": item_obj,
-                            }
-                        )
-                    except Exception as e_url:
-                        logging.error(
-                            f"Error constructing details URL for {item_obj.title}: {e_url}"
-                        )
-                else:
-                    logging.warning(
-                        f"Skipping item {getattr(item_obj, 'title', 'Unknown Title')} due to missing key or _server attribute."
-                    )
-
-        logging.info(
-            f"Cache hit for {len(cached_items)} items, need to fetch {len(items_to_process_async)} items."
+        # Fetch all item details using cache when possible
+        all_fetched_items, fetch_stats = coordinator.fetch_all_item_details(
+            initial_watchlist, plex_token_str  # or just 'token' in the other function
         )
 
-        # Only fetch if there are items to fetch
-        fetched_data_list = []
-        if items_to_process_async:
-            async_fetch_start_time = time.time()
-            fetched_data_list = asyncio.run(
-                run_async_fetches(items_to_process_async, plex_token_str)
-            )
-            async_fetch_end_time = time.time()
-            logging.info(
-                f"Async fetching of {len(items_to_process_async)} item details took {async_fetch_end_time - async_fetch_start_time:.4f} seconds."
-            )
-
-            # Update cache with newly fetched items
-            for item_details in fetched_data_list:
-                original_item = item_details["original_plex_item"]
-                cache_entry = {
-                    "imdb_id": item_details.get("imdb_id"),
-                    "tmdb_id": item_details.get("tmdb_id"),
-                    "media_type": item_details.get("media_type"),
-                    "error": item_details.get("error"),
-                }
-                detail_cache.set(original_item, cache_entry)
-
-            # Save cache to disk
-            detail_cache.commit()
-            logging.info(
-                f"Updated cache with {len(fetched_data_list)} new entries. Total cache size: {detail_cache.stats()['total_entries']} entries."
-            )
-
-        # Combine cached and freshly fetched results
-        all_fetched_items = cached_items + fetched_data_list
+        logging.info(
+            f"Fetched details for {fetch_stats['total_items']} items "
+            f"({fetch_stats['cache_hits']} from cache, {fetch_stats['fetched_count']} fetched)"
+        )
 
         total_items_from_async = len(all_fetched_items)
         skipped_count = 0
@@ -364,28 +297,9 @@ def get_wanted_from_plex_watchlist(
             )
 
             if not imdb_id and tmdb_id and media_type:
-                logging.info(
-                    f"No IMDB ID for '{title}', attempting TMDB ({tmdb_id}, type: {media_type}) to IMDB conversion."
-                )
-                conversion_start_time = time.time()
-                try:
-                    api = DirectAPI()
-                    converted_imdb_id, source = api.tmdb_to_imdb(
-                        tmdb_id, media_type=media_type
-                    )
-                    if converted_imdb_id:
-                        imdb_id = converted_imdb_id
-                        logging.info(
-                            f"Successfully converted TMDB ID {tmdb_id} to IMDB ID {imdb_id} for '{title}' via {source}. Took {time.time() - conversion_start_time:.4f}s."
-                        )
-                    else:
-                        logging.warning(
-                            f"TMDB to IMDB conversion failed for '{title}' (TMDB: {tmdb_id}). Took {time.time() - conversion_start_time:.4f}s."
-                        )
-                except Exception as e_conv:
-                    logging.error(
-                        f"Error during TMDB to IMDB conversion for '{title}': {e_conv}. Took {time.time() - conversion_start_time:.4f}s."
-                    )
+                converted_imdb_id, _ = tmdb_to_imdb(tmdb_id, media_type, title)
+                if converted_imdb_id:
+                    imdb_id = converted_imdb_id
 
             if not imdb_id:
                 skipped_count += 1
@@ -531,85 +445,19 @@ def get_wanted_from_other_plex_watchlist(
         other_detail_cache_file = os.path.join(
             DB_CONTENT_DIR, f"plex_detail_cache_{username}.json"
         )
-        detail_cache = PlexDetailCache(other_detail_cache_file, max_age_days=30)
+        # Initialize the detail cache
+        detail_cache = PlexDetailCache(DETAIL_CACHE_FILE, max_age_days=30)
+        coordinator = WatchlistFetchCoordinator(detail_cache)
 
-        items_to_process_async = []
-        cached_items = []
-
-        for item_obj in initial_watchlist:
-            # Check cache first
-            cached_details = detail_cache.get(item_obj)
-            if cached_details:
-                # Reconstruct the expected format from cache
-                cached_items.append(
-                    {
-                        "imdb_id": cached_details.get("imdb_id"),
-                        "tmdb_id": cached_details.get("tmdb_id"),
-                        "media_type": cached_details.get("media_type"),
-                        "original_plex_item": item_obj,
-                        "error": cached_details.get("error"),
-                    }
-                )
-            else:
-                # Need to fetch this item
-                if (
-                    hasattr(item_obj, "key")
-                    and item_obj.key
-                    and hasattr(item_obj, "_server")
-                ):
-                    try:
-                        details_url = item_obj._server.url(item_obj.key)
-                        items_to_process_async.append(
-                            {
-                                "title": item_obj.title,
-                                "url": details_url,
-                                "original_plex_item": item_obj,
-                            }
-                        )
-                    except Exception as e_url:
-                        logging.error(
-                            f"User {username}: Error constructing details URL for {item_obj.title}: {e_url}"
-                        )
-                else:
-                    logging.warning(
-                        f"User {username}: Skipping item {getattr(item_obj, 'title', 'Unknown Title')} due to missing key or _server attribute."
-                    )
-
-        logging.info(
-            f"User {username}: Cache hit for {len(cached_items)} items, need to fetch {len(items_to_process_async)} items."
+        # Fetch all item details using cache when possible
+        all_fetched_items, fetch_stats = coordinator.fetch_all_item_details(
+            initial_watchlist, token
         )
 
-        # Only fetch if there are items to fetch
-        fetched_data_list = []
-        if items_to_process_async:
-            async_fetch_start_time = time.time()
-            fetched_data_list = asyncio.run(
-                run_async_fetches(items_to_process_async, token)
-            )
-            async_fetch_end_time = time.time()
-            logging.info(
-                f"User {username}: Async fetching of {len(items_to_process_async)} item details took {async_fetch_end_time - async_fetch_start_time:.4f} seconds."
-            )
-
-            # Update cache with newly fetched items
-            for item_details in fetched_data_list:
-                original_item = item_details["original_plex_item"]
-                cache_entry = {
-                    "imdb_id": item_details.get("imdb_id"),
-                    "tmdb_id": item_details.get("tmdb_id"),
-                    "media_type": item_details.get("media_type"),
-                    "error": item_details.get("error"),
-                }
-                detail_cache.set(original_item, cache_entry)
-
-            # Save cache to disk
-            detail_cache.commit()
-            logging.info(
-                f"User {username}: Updated cache with {len(fetched_data_list)} new entries. Total cache size: {detail_cache.stats()['total_entries']} entries."
-            )
-
-        # Combine cached and freshly fetched results
-        all_fetched_items = cached_items + fetched_data_list
+        logging.info(
+            f"Fetched details for {fetch_stats['total_items']} items "
+            f"({fetch_stats['cache_hits']} from cache, {fetch_stats['fetched_count']} fetched)"
+        )
 
         items_processed_count = 0
         items_skipped_no_imdb = 0
