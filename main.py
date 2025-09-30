@@ -88,6 +88,8 @@ metadata_process = None
 metadata_lock = threading.Lock()
 global_program_runner_instance = None
 
+print("test_main")
+
 
 def get_babelfish_data_dir():
     return os.path.join(os.path.dirname(babelfish.__file__), "data")

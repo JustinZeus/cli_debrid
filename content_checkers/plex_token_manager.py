@@ -49,6 +49,8 @@ def validate_plex_tokens():
     from queues.config_manager import (
         load_config,
     )  # Local import to avoid circular dependency
+
+    print("test validate")
     from plexapi.myplex import MyPlexAccount
     import logging
     import time
