@@ -39,6 +39,7 @@ class WatchlistProcessor:
         }
 
         processing_start_time = time.time()
+        print("This is a test for debugging purposes.")
 
         for item_details in all_fetched_items:
             result = self._process_single_item(item_details, should_remove, keep_series)
