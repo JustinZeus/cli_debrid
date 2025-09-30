@@ -114,7 +114,11 @@ import time
 import aiohttp
 import asyncio
 import xml.etree.ElementTree as ET
-from utilities.plex_detail_cache import PlexDetailCache
+from utilities.watchlist import (
+    PlexDetailCache,
+    fetch_item_details_and_extract_ids,
+    run_async_fetches,
+)
 
 # Get db_content directory from environment variable with fallback
 DB_CONTENT_DIR = os.environ.get("USER_DB_CONTENT", "/user/db_content")
@@ -145,117 +149,6 @@ def save_plex_cache(cache, cache_file):
             pickle.dump(cache, f)
     except Exception as e:
         logging.error(f"Error saving Plex watchlist cache: {e}")
-
-
-async def fetch_item_details_and_extract_ids(session, item_data, plex_token_str):
-    """
-    Fetches full metadata for a single Plex item and extracts IMDB ID, TMDB ID, and media type.
-    item_data is a dict: {'title': str, 'url': str, 'original_plex_item': PlexAPIObject}
-    """
-    headers = {"X-Plex-Token": plex_token_str, "Accept": "application/xml"}
-    url = item_data["url"]
-    title = item_data["title"]
-    original_plex_item = item_data["original_plex_item"]
-
-    try:
-        async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
-        ) as response:
-            if response.status == 200:
-                xml_text = await response.text()
-                root = ET.fromstring(xml_text)  # MediaContainer is the typical root
-
-                media_element = None
-                # Plex usually wraps the single item in MediaContainer
-                if root.tag == "MediaContainer":
-                    media_element = root.find("./Video")  # For movies
-                    if not media_element:
-                        media_element = root.find("./Directory")  # For shows
-
-                if not media_element:  # Should not happen if XML is as expected
-                    logging.warning(
-                        f"AsyncFetch: Could not find Video or Directory tag in XML for {title} from {url}"
-                    )
-                    return {
-                        "imdb_id": None,
-                        "tmdb_id": None,
-                        "media_type": None,
-                        "original_plex_item": original_plex_item,
-                        "error": "XMLParseError",
-                    }
-
-                imdb_id_found = None
-                tmdb_id_found = None
-                fetched_media_type = media_element.get("type")  # 'movie' or 'show'
-
-                for guid_tag in media_element.findall("./Guid"):
-                    guid_str = guid_tag.get("id")
-                    if guid_str:
-                        if guid_str.startswith("imdb://"):
-                            imdb_id_found = guid_str.split("//")[1]
-                        elif guid_str.startswith("tmdb://"):
-                            tmdb_id_found = guid_str.split("//")[1]
-
-                logging.debug(
-                    f"AsyncFetch: For '{title}', found IMDB: {imdb_id_found}, TMDB: {tmdb_id_found}, Type: {fetched_media_type}"
-                )
-                return {
-                    "imdb_id": imdb_id_found,
-                    "tmdb_id": tmdb_id_found,
-                    "media_type": fetched_media_type,
-                    "original_plex_item": original_plex_item,
-                }
-
-            else:
-                logging.error(
-                    f"AsyncFetch: Error fetching details for {title} from {url}. Status: {response.status}, Response: {await response.text()[:200]}"
-                )
-                return {
-                    "imdb_id": None,
-                    "tmdb_id": None,
-                    "media_type": None,
-                    "original_plex_item": original_plex_item,
-                    "error": f"HTTP{response.status}",
-                }
-    except asyncio.TimeoutError:
-        logging.error(f"AsyncFetch: Timeout fetching details for {title} from {url}")
-        return {
-            "imdb_id": None,
-            "tmdb_id": None,
-            "media_type": None,
-            "original_plex_item": original_plex_item,
-            "error": "Timeout",
-        }
-    except Exception as e:
-        logging.error(
-            f"AsyncFetch: Exception fetching or parsing details for {title} from {url}: {e}"
-        )
-        return {
-            "imdb_id": None,
-            "tmdb_id": None,
-            "media_type": None,
-            "original_plex_item": original_plex_item,
-            "error": str(e),
-        }
-
-
-async def run_async_fetches(watchlist_items_with_urls, plex_token_str):
-    """
-    Runs all async fetch tasks concurrently.
-    watchlist_items_with_urls is a list of dicts: [{'title': str, 'url': str, 'original_plex_item': PlexAPIObject}]
-    """
-    conn = aiohttp.TCPConnector(
-        limit_per_host=10
-    )  # Limit concurrent connections to the same host
-    async with aiohttp.ClientSession(connector=conn) as session:
-        tasks = [
-            fetch_item_details_and_extract_ids(session, item_data, plex_token_str)
-            for item_data in watchlist_items_with_urls
-        ]
-        results = await asyncio.gather(
-            *tasks, return_exceptions=False
-        )  # Errors handled in fetch_item_details
-        return results
 
 
 def get_plex_client():
