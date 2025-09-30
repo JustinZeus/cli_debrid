@@ -32,7 +32,8 @@ from utilities.settings import set_setting
 from utilities.settings import get_setting
 from logging_config import stop_global_profiling, start_global_profiling
 import babelfish
-from content_checkers.plex_token_manager import validate_plex_tokens
+
+# from content_checkers.plex_token_manager import validate_plex_tokens
 from routes.notifications import (
     setup_crash_handler,
     register_shutdown_handler,
