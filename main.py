@@ -1,5 +1,6 @@
 import sys
 import os
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import appdirs
 import threading
@@ -16,7 +17,7 @@ import json
 import tracemalloc
 
 # Import Windows-specific modules only on Windows
-if platform.system() == 'Windows':
+if platform.system() == "Windows":
     import win32gui
     import win32con
 
@@ -29,33 +30,37 @@ from utilities.settings import set_setting
 from utilities.settings import get_setting
 from logging_config import stop_global_profiling, start_global_profiling
 import babelfish
-from content_checkers.plex_watchlist import validate_plex_tokens
+from content_checkers.plex_token_manager import validate_plex_tokens
 from routes.notifications import (
-    setup_crash_handler, 
-    register_shutdown_handler, 
+    setup_crash_handler,
+    register_shutdown_handler,
     register_startup_handler,
-    send_program_stop_notification
+    send_program_stop_notification,
 )
 from database import schema_management
 
-if sys.platform.startswith('win'):
+if sys.platform.startswith("win"):
     app_name = "cli_debrid"  # Replace with your app's name
     app_author = "cli_debrid"  # Replace with your company name
     base_path = appdirs.user_data_dir(app_name, app_author)
-    os.environ['USER_CONFIG'] = os.path.join(base_path, 'config')
-    os.environ['USER_LOGS'] = os.path.join(base_path, 'logs')
-    os.environ['USER_DB_CONTENT'] = os.path.join(base_path, 'db_content')
+    os.environ["USER_CONFIG"] = os.path.join(base_path, "config")
+    os.environ["USER_LOGS"] = os.path.join(base_path, "logs")
+    os.environ["USER_DB_CONTENT"] = os.path.join(base_path, "db_content")
 else:
-    os.environ.setdefault('USER_CONFIG', '/user/config')
-    os.environ.setdefault('USER_LOGS', '/user/logs')
-    os.environ.setdefault('USER_DB_CONTENT', '/user/db_content')
+    os.environ.setdefault("USER_CONFIG", "/user/config")
+    os.environ.setdefault("USER_LOGS", "/user/logs")
+    os.environ.setdefault("USER_DB_CONTENT", "/user/db_content")
 
 # Ensure directories exist
-for dir_path in [os.environ['USER_CONFIG'], os.environ['USER_LOGS'], os.environ['USER_DB_CONTENT']]:
+for dir_path in [
+    os.environ["USER_CONFIG"],
+    os.environ["USER_LOGS"],
+    os.environ["USER_DB_CONTENT"],
+]:
     os.makedirs(dir_path, exist_ok=True)
 
 # Set environment mode flag - defaults to 'full' for current behavior
-os.environ.setdefault('CLI_DEBRID_ENVIRONMENT_MODE', 'full')
+os.environ.setdefault("CLI_DEBRID_ENVIRONMENT_MODE", "full")
 
 print(f"CLI_DEBRID_ENVIRONMENT_MODE: {os.environ['CLI_DEBRID_ENVIRONMENT_MODE']}")
 
@@ -83,49 +88,55 @@ metadata_process = None
 metadata_lock = threading.Lock()
 global_program_runner_instance = None
 
+
 def get_babelfish_data_dir():
-    return os.path.join(os.path.dirname(babelfish.__file__), 'data')
+    return os.path.join(os.path.dirname(babelfish.__file__), "data")
+
 
 def setup_logging():
-    logging.getLogger('selector').setLevel(logging.WARNING)
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger("selector").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
     # Get log directory from environment variable with fallback
-    log_dir = os.environ.get('USER_LOGS', '/user/logs')
+    log_dir = os.environ.get("USER_LOGS", "/user/logs")
 
     # Ensure logs directory exists
     os.makedirs(log_dir, exist_ok=True)
 
     # Ensure log files exist
-    for log_file in ['debug.log']:
+    for log_file in ["debug.log"]:
         log_path = os.path.join(log_dir, log_file)
         if not os.path.exists(log_path):
-            open(log_path, 'a').close()
+            open(log_path, "a").close()
 
     import logging_config
+
     logging_config.setup_logging()
+
 
 def setup_directories():
     # Get config directory from environment variable
-    config_dir = os.environ.get('USER_CONFIG', '/user/config')
-    log_dir = os.environ.get('USER_LOGS', '/user/logs')
-    db_content_dir = os.environ.get('USER_DB_CONTENT', '/user/db_content')
-    
+    config_dir = os.environ.get("USER_CONFIG", "/user/config")
+    log_dir = os.environ.get("USER_LOGS", "/user/logs")
+    db_content_dir = os.environ.get("USER_DB_CONTENT", "/user/db_content")
+
     # Ensure directories exist
     os.makedirs(config_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(db_content_dir, exist_ok=True)
 
+
 def backup_config():
     # Get config directory from environment variable with fallback
-    config_dir = os.environ.get('USER_CONFIG', '/user/config')
-    config_path = os.path.join(config_dir, 'config.json')
+    config_dir = os.environ.get("USER_CONFIG", "/user/config")
+    config_path = os.path.join(config_dir, "config.json")
     if os.path.exists(config_path):
-        backup_path = os.path.join(config_dir, 'config_backup.json')
+        backup_path = os.path.join(config_dir, "config_backup.json")
         shutil.copy2(config_path, backup_path)
         logging.info(f"Backup of config.json created: {backup_path}")
     else:
         logging.warning("config.json not found, no backup created.")
+
 
 def backup_database():
     """
@@ -134,49 +145,53 @@ def backup_database():
     """
     try:
         # Get db_content directory from environment variable
-        db_content_dir = os.environ.get('USER_DB_CONTENT', '/user/db_content')
-        db_path = os.path.join(db_content_dir, 'media_items.db')
-        
+        db_content_dir = os.environ.get("USER_DB_CONTENT", "/user/db_content")
+        db_path = os.path.join(db_content_dir, "media_items.db")
+
         if not os.path.exists(db_path):
             logging.warning("media_items.db not found, no backup created.")
             return
-            
+
         # Create backup directory if it doesn't exist
-        backup_dir = os.path.join(db_content_dir, 'backups')
+        backup_dir = os.path.join(db_content_dir, "backups")
         os.makedirs(backup_dir, exist_ok=True)
-        
+
         # Generate backup filename with timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_path = os.path.join(backup_dir, f'media_items_{timestamp}.db')
-        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"media_items_{timestamp}.db")
+
         # Create the backup
         shutil.copy2(db_path, backup_path)
         logging.info(f"Backup of media_items.db created: {backup_path}")
-        
+
         # Get list of existing backups and sort by modification time
-        existing_backups = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) 
-                          if f.startswith('media_items_') and f.endswith('.db')]
+        existing_backups = [
+            os.path.join(backup_dir, f)
+            for f in os.listdir(backup_dir)
+            if f.startswith("media_items_") and f.endswith(".db")
+        ]
         existing_backups.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-        
+
         # Remove older backups, keeping only the two most recent
         for old_backup in existing_backups[2:]:
             os.remove(old_backup)
             logging.info(f"Removed old backup: {old_backup}")
-            
+
     except Exception as e:
         logging.error(f"Error creating database backup: {str(e)}")
+
 
 def get_version():
     try:
         # Get the application path based on whether we're frozen or not
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             application_path = sys._MEIPASS
         else:
             application_path = os.path.dirname(os.path.abspath(__file__))
-        
-        version_path = os.path.join(application_path, 'version.txt')
-        
-        with open(version_path, 'r') as version_file:
+
+        version_path = os.path.join(application_path, "version.txt")
+
+        with open(version_path, "r") as version_file:
             # Read the exact contents and only strip whitespace
             version = version_file.readline().strip()
             return version  # Return immediately to avoid any further processing
@@ -187,6 +202,7 @@ def get_version():
         logging.error(f"Error reading version: {e}")
         return "0.0.0"
 
+
 def signal_handler(signum, frame):
     """Handle termination signals gracefully."""
     stop_program(from_signal=True)
@@ -195,113 +211,168 @@ def signal_handler(signum, frame):
         stop_global_profiling()
         sys.exit(0)
 
+
 def update_web_ui_state(state):
     try:
-        port = int(os.environ.get('CLI_DEBRID_PORT', 5000))
-        api.post(f'http://localhost:{port}/api/update_program_state', json={'state': state})
+        port = int(os.environ.get("CLI_DEBRID_PORT", 5000))
+        api.post(
+            f"http://localhost:{port}/api/update_program_state", json={"state": state}
+        )
     except api.exceptions.RequestException:
         logging.error("Failed to update web UI state")
+
 
 def package_app():
     try:
         # Determine the path to version.txt and other resources
-        version_path = os.path.join(os.path.dirname(__file__), 'version.txt')
-        templates_path = os.path.join(os.path.dirname(__file__), 'templates')
-        cli_battery_path = os.path.join(os.path.dirname(__file__), 'cli_battery')
-        database_path = os.path.join(os.path.dirname(__file__), 'database')
-        content_checkers_path = os.path.join(os.path.dirname(__file__), 'content_checkers')
-        debrid_path = os.path.join(os.path.dirname(__file__), 'debrid')
-        metadata_path = os.path.join(os.path.dirname(__file__), 'metadata')
-        queues_path = os.path.join(os.path.dirname(__file__), 'queues')
-        routes_path = os.path.join(os.path.dirname(__file__), 'routes')
-        scraper_path = os.path.join(os.path.dirname(__file__), 'scraper')
-        static_path = os.path.join(os.path.dirname(__file__), 'static')
-        utilities_path = os.path.join(os.path.dirname(__file__), 'utilities')
-        icon_path = os.path.join(os.path.dirname(__file__), 'static', 'white-icon-32x32.png')
-        
+        version_path = os.path.join(os.path.dirname(__file__), "version.txt")
+        templates_path = os.path.join(os.path.dirname(__file__), "templates")
+        cli_battery_path = os.path.join(os.path.dirname(__file__), "cli_battery")
+        database_path = os.path.join(os.path.dirname(__file__), "database")
+        content_checkers_path = os.path.join(
+            os.path.dirname(__file__), "content_checkers"
+        )
+        debrid_path = os.path.join(os.path.dirname(__file__), "debrid")
+        metadata_path = os.path.join(os.path.dirname(__file__), "metadata")
+        queues_path = os.path.join(os.path.dirname(__file__), "queues")
+        routes_path = os.path.join(os.path.dirname(__file__), "routes")
+        scraper_path = os.path.join(os.path.dirname(__file__), "scraper")
+        static_path = os.path.join(os.path.dirname(__file__), "static")
+        utilities_path = os.path.join(os.path.dirname(__file__), "utilities")
+        icon_path = os.path.join(
+            os.path.dirname(__file__), "static", "white-icon-32x32.png"
+        )
+
         # Get babelfish data directory
         babelfish_data = get_babelfish_data_dir()
-        
+
         # Add the path to tooltip_schema.json
-        tooltip_schema_path = os.path.join(os.path.dirname(__file__), 'tooltip_schema.json')
+        tooltip_schema_path = os.path.join(
+            os.path.dirname(__file__), "tooltip_schema.json"
+        )
 
         # Construct the PyInstaller command
         command = [
             "pyinstaller",
             "--onefile",
-            #"--windowed",  # Add this option to prevent the console window
-            "--icon", icon_path,  # Use your icon for the application
-            "--add-data", f"{version_path};.",
-            "--add-data", f"{babelfish_data};babelfish/data",
-            "--add-data", f"{templates_path};templates",
-            "--add-data", f"{cli_battery_path};cli_battery",
-            "--add-data", f"{database_path};database",
-            "--add-data", f"{content_checkers_path};content_checkers",
-            "--add-data", f"{debrid_path};debrid",
-            "--add-data", f"{metadata_path};metadata",
-            "--add-data", f"{queues_path};queues",
-            "--add-data", f"{routes_path};routes",
-            "--add-data", f"{scraper_path};scraper",
-            "--add-data", f"{static_path};static",
-            "--add-data", f"{utilities_path};utilities",
-            "--add-data", f"{icon_path};static",
+            # "--windowed",  # Add this option to prevent the console window
+            "--icon",
+            icon_path,  # Use your icon for the application
+            "--add-data",
+            f"{version_path};.",
+            "--add-data",
+            f"{babelfish_data};babelfish/data",
+            "--add-data",
+            f"{templates_path};templates",
+            "--add-data",
+            f"{cli_battery_path};cli_battery",
+            "--add-data",
+            f"{database_path};database",
+            "--add-data",
+            f"{content_checkers_path};content_checkers",
+            "--add-data",
+            f"{debrid_path};debrid",
+            "--add-data",
+            f"{metadata_path};metadata",
+            "--add-data",
+            f"{queues_path};queues",
+            "--add-data",
+            f"{routes_path};routes",
+            "--add-data",
+            f"{scraper_path};scraper",
+            "--add-data",
+            f"{static_path};static",
+            "--add-data",
+            f"{utilities_path};utilities",
+            "--add-data",
+            f"{icon_path};static",
             # Add the tooltip_schema.json file
-            "--add-data", f"{tooltip_schema_path};.",
-            "--additional-hooks-dir", "hooks",
-            "--hidden-import", "database",
-            "--hidden-import", "database.core",
-            "--hidden-import", "database.collected_items",
-            "--hidden-import", "database.blacklist",
-            "--hidden-import", "database.schema_management",
-            "--hidden-import", "database.poster_management",
-            "--hidden-import", "database.statistics",
-            "--hidden-import", "database.wanted_items",
-            "--hidden-import", "database.database_reading",
-            "--hidden-import", "database.database_writing",
-            "--hidden-import", ".MetaData",
-            "--hidden-import", ".config",
-            "--hidden-import", ".main",
-            "--hidden-import", "content_checkers.trakt",
-            "--hidden-import", "logging_config",
-            "--hidden-import", "main",
-            "--hidden-import", "metadata.Metadata",
-            "main.py"
+            "--add-data",
+            f"{tooltip_schema_path};.",
+            "--additional-hooks-dir",
+            "hooks",
+            "--hidden-import",
+            "database",
+            "--hidden-import",
+            "database.core",
+            "--hidden-import",
+            "database.collected_items",
+            "--hidden-import",
+            "database.blacklist",
+            "--hidden-import",
+            "database.schema_management",
+            "--hidden-import",
+            "database.poster_management",
+            "--hidden-import",
+            "database.statistics",
+            "--hidden-import",
+            "database.wanted_items",
+            "--hidden-import",
+            "database.database_reading",
+            "--hidden-import",
+            "database.database_writing",
+            "--hidden-import",
+            ".MetaData",
+            "--hidden-import",
+            ".config",
+            "--hidden-import",
+            ".main",
+            "--hidden-import",
+            "content_checkers.trakt",
+            "--hidden-import",
+            "logging_config",
+            "--hidden-import",
+            "main",
+            "--hidden-import",
+            "metadata.Metadata",
+            "main.py",
         ]
-        
+
         # Run the PyInstaller command
         subprocess.run(command, check=True)
         print("App packaged successfully. Executable is in the 'dist' folder.")
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while packaging the app: {e}")
 
+
 # Function to check if running as a packaged executable
 def is_frozen():
-    return getattr(sys, 'frozen', False)
+    return getattr(sys, "frozen", False)
+
 
 # Modify the setup_tray_icon function
 def setup_tray_icon():
     # Only proceed if we're on Windows
-    if platform.system() != 'Windows':
+    if platform.system() != "Windows":
         logging.info("Tray icon is only supported on Windows")
         return
 
     logging.info("Starting setup_tray_icon function")
-    
+
     # Check for FFmpeg installation
     def check_ffmpeg():
         try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5, check=True)
+            subprocess.run(
+                ["ffmpeg", "-version"], capture_output=True, timeout=5, check=True
+            )
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             return False
 
     # Check FFmpeg
     if not check_ffmpeg():
-        logging.warning("FFmpeg not found on system. Some video processing features may not work. Please install FFmpeg manually if needed.")
+        logging.warning(
+            "FFmpeg not found on system. Some video processing features may not work. Please install FFmpeg manually if needed."
+        )
     else:
         logging.info("FFmpeg is already installed")
 
     import socket
+
     ip_address = socket.gethostbyname(socket.gethostname())
 
     # Launch browser after 2 seconds
@@ -309,24 +380,24 @@ def setup_tray_icon():
         time.sleep(2)  # Wait for 2 seconds
         try:
             # Check if auto browser launch is disabled in settings
-            if get_setting('UI Settings', 'disable_auto_browser', False):
+            if get_setting("UI Settings", "disable_auto_browser", False):
                 logging.info("Automatic browser launch is disabled in settings")
                 return
-                
-            port = int(os.environ.get('CLI_DEBRID_PORT', 5000))
+
+            port = int(os.environ.get("CLI_DEBRID_PORT", 5000))
             if check_localhost_binding(port):
-                webbrowser.open(f'http://localhost:{port}')
+                webbrowser.open(f"http://localhost:{port}")
                 logging.info("Browser launched successfully")
             else:
                 logging.error(f"Failed to bind to localhost:{port}")
         except Exception as e:
             logging.error(f"Failed to launch browser: {e}")
-    
+
     # Start browser launch in a separate thread
     browser_thread = threading.Thread(target=delayed_browser_launch)
     browser_thread.daemon = True
     browser_thread.start()
-    
+
     # Import required modules
     try:
         import pystray
@@ -334,6 +405,7 @@ def setup_tray_icon():
         from PIL import Image
         import win32gui
         import win32con
+
         logging.info("Successfully imported pystray, PIL, and Windows modules")
     except ImportError as e:
         logging.error(f"Failed to import required modules: {e}")
@@ -344,41 +416,48 @@ def setup_tray_icon():
         def enum_windows_callback(hwnd, _):
             window_text = win32gui.GetWindowText(hwnd)
             logging.debug(f"Found window: {window_text}")
-            if "cli_debrid" in window_text.lower() and window_text.lower().endswith(".exe"):
+            if "cli_debrid" in window_text.lower() and window_text.lower().endswith(
+                ".exe"
+            ):
                 logging.info(f"Hiding window: {window_text}")
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
             elif "npm" in window_text.lower():
                 logging.info(f"Hiding window: {window_text}")
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+
         win32gui.EnumWindows(enum_windows_callback, None)
 
     def restore_from_tray(icon):
         # Show both the main window and console window
         def enum_windows_callback(hwnd, _):
             window_text = win32gui.GetWindowText(hwnd)
-            if "cli_debrid" in window_text.lower() and window_text.lower().endswith(".exe"):
+            if "cli_debrid" in window_text.lower() and window_text.lower().endswith(
+                ".exe"
+            ):
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 win32gui.SetForegroundWindow(hwnd)
             elif "npm" in window_text.lower():
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 win32gui.SetForegroundWindow(hwnd)
+
         win32gui.EnumWindows(enum_windows_callback, None)
 
     def restore_menu_action(icon, item):
         restore_from_tray(icon)
-        
+
     def hide_to_tray(icon, item):
         minimize_to_tray()
 
     def on_exit(icon, item):
         print("Exit initiated. Generating memory usage report...")
-        
+
         # Only collect a snapshot if tracemalloc is actively tracing
         try:
             import tracemalloc
+
             if tracemalloc.is_tracing():
                 snapshot = tracemalloc.take_snapshot()
-                top_stats = snapshot.statistics('lineno')
+                top_stats = snapshot.statistics("lineno")
 
                 print("\n[ Top 10 memory consuming locations ]")
                 for stat in top_stats[:10]:
@@ -392,8 +471,9 @@ def setup_tray_icon():
         icon.stop()
         # Stop all processes
         # Access ProgramRunner singleton directly
-        from queues.run_program import ProgramRunner 
-        program_runner_instance = ProgramRunner() # Get singleton instance
+        from queues.run_program import ProgramRunner
+
+        program_runner_instance = ProgramRunner()  # Get singleton instance
         print("\nStopping the program...")
 
         # Stop the main program runner using the instance
@@ -402,7 +482,7 @@ def setup_tray_icon():
             print("Main program stopped.")
 
         # Terminate the metadata battery process
-        global metadata_process # Keep metadata_process global for now
+        global metadata_process  # Keep metadata_process global for now
         with metadata_lock:
             if metadata_process and metadata_process.poll() is None:
                 print("Stopping metadata battery...")
@@ -416,13 +496,16 @@ def setup_tray_icon():
         # Terminate any running phalanx_db_hyperswarm processes
         try:
             # Find any node/npm processes running phalanx_db_hyperswarm
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
                 try:
                     cmdline = proc.cmdline()
                     # Check for both direct node processes and npm start processes
                     is_target = (
-                        (any('node' in cmd.lower() for cmd in cmdline) and any('phalanx_db' in cmd.lower() for cmd in cmdline)) or
-                        (any('node' in cmd.lower() for cmd in cmdline) and any('--expose-gc' in cmd.lower() for cmd in cmdline))
+                        any("node" in cmd.lower() for cmd in cmdline)
+                        and any("phalanx_db" in cmd.lower() for cmd in cmdline)
+                    ) or (
+                        any("node" in cmd.lower() for cmd in cmdline)
+                        and any("--expose-gc" in cmd.lower() for cmd in cmdline)
                     )
                     if is_target:
                         print(f"Stopping process: {proc.pid} - {' '.join(cmdline)}")
@@ -432,7 +515,11 @@ def setup_tray_icon():
                         except psutil.TimeoutExpired:
                             print(f"Force killing process: {proc.pid}")
                             proc.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
                     continue
             print("Phalanx DB service stopped.")
         except Exception as e:
@@ -459,28 +546,28 @@ def setup_tray_icon():
             exe_name = os.path.basename(sys.executable)
         else:
             # Construct the expected executable name if not frozen (adjust if needed)
-            version = get_version() 
-            exe_name = f"cli_debrid-{version}.exe" # Or adjust based on actual name
+            version = get_version()
+            exe_name = f"cli_debrid-{version}.exe"  # Or adjust based on actual name
             # Fallback if version reading fails or name is different
-            if exe_name == "cli_debrid-0.0.0.exe": 
-                exe_name = "cli_debrid.exe" # Common fallback
-        
+            if exe_name == "cli_debrid-0.0.0.exe":
+                exe_name = "cli_debrid.exe"  # Common fallback
+
         # Use shell=True carefully on Windows for taskkill
-        subprocess.run(['taskkill', '/F', '/IM', exe_name], shell=True, check=False) 
+        subprocess.run(["taskkill", "/F", "/IM", exe_name], shell=True, check=False)
 
     # Create the menu
     menu = (
-        item('Show', restore_menu_action),
-        item('Hide', hide_to_tray),
-        item('Exit', on_exit),
+        item("Show", restore_menu_action),
+        item("Hide", hide_to_tray),
+        item("Exit", on_exit),
     )
 
     # Get the icon path
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         application_path = sys._MEIPASS
     else:
         application_path = os.path.dirname(os.path.abspath(__file__))
-    
+
     # List all windows to help with debugging
     def list_windows():
         def callback(hwnd, _):
@@ -488,41 +575,51 @@ def setup_tray_icon():
                 title = win32gui.GetWindowText(hwnd)
                 if title:
                     logging.info(f"Visible window: {title}")
+
         win32gui.EnumWindows(callback, None)
-    
+
     logging.info("Listing all visible windows:")
     list_windows()
-    
-    icon_path = os.path.join(application_path, 'static', 'white-icon-32x32.png')
-    
+
+    icon_path = os.path.join(application_path, "static", "white-icon-32x32.png")
+
     # If the icon doesn't exist in the frozen path, try the static directory
     if not os.path.exists(icon_path):
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'white-icon-32x32.png')
-    
+        icon_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "static", "white-icon-32x32.png"
+        )
+
     logging.info(f"Using icon path: {icon_path}")
-    
+
     try:
         image = Image.open(icon_path)
         import socket
+
         ip_address = socket.gethostbyname(socket.gethostname())
-        battery_host = os.environ.get('CLI_DEBRID_BATTERY_HOST', 'localhost')
-        icon = pystray.Icon("CLI Debrid", image, f"CLI Debrid\nMain app: localhost:{os.environ.get('CLI_DEBRID_PORT', '5000')}\nBattery: {battery_host}:{os.environ.get('CLI_DEBRID_BATTERY_PORT', '5001')}", menu)
-        
+        battery_host = os.environ.get("CLI_DEBRID_BATTERY_HOST", "localhost")
+        icon = pystray.Icon(
+            "CLI Debrid",
+            image,
+            f"CLI Debrid\nMain app: localhost:{os.environ.get('CLI_DEBRID_PORT', '5000')}\nBattery: {battery_host}:{os.environ.get('CLI_DEBRID_BATTERY_PORT', '5001')}",
+            menu,
+        )
+
         # Set up double-click handler
         icon.on_activate = restore_from_tray
-        
+
         # Minimize the window to tray when the icon is created
         minimize_to_tray()
-        
+
         icon.run()
     except Exception as e:
         logging.error(f"Failed to create or run system tray icon: {e}")
         return
 
+
 def check_localhost_binding(port=5000):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(('127.0.0.1', port))
+        sock.bind(("127.0.0.1", port))
         sock.close()
         return True
     except socket.error:
@@ -530,16 +627,18 @@ def check_localhost_binding(port=5000):
         stop_program()
         return False
 
+
 # Modify the stop_program function
 def stop_program(from_signal=False):
     print("Exit initiated. Generating memory usage report...")
-    
+
     # Only collect a snapshot if tracemalloc is actively tracing
     try:
         import tracemalloc
+
         if tracemalloc.is_tracing():
             snapshot = tracemalloc.take_snapshot()
-            top_stats = snapshot.statistics('lineno')
+            top_stats = snapshot.statistics("lineno")
 
             print("\n[ Top 10 memory consuming locations ]")
             for stat in top_stats[:10]:
@@ -551,9 +650,10 @@ def stop_program(from_signal=False):
 
     # Access ProgramRunner singleton directly
     from queues.run_program import ProgramRunner
-    program_runner_instance = ProgramRunner() # Get singleton instance
+
+    program_runner_instance = ProgramRunner()  # Get singleton instance
     # Keep metadata_process global for now
-    global metadata_process 
+    global metadata_process
     print("\nStopping the program...")
 
     # Stop the main program runner using the instance
@@ -596,6 +696,7 @@ def stop_program(from_signal=False):
     if not from_signal:
         os.kill(os.getpid(), signal.SIGINT)
 
+
 def update_media_locations():
     """
     Startup function that reviews database items and updates their location_on_disk field
@@ -616,18 +717,20 @@ def update_media_locations():
     def build_file_map(zurg_all_folder):
         """Build a map of filenames to their full paths using find"""
         cmd = f"find {shlex.quote(zurg_all_folder)} -type f"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=60
+        )
         if result.returncode != 0:
             logging.error(f"Error running find command: {result.stderr}")
             return {}
-        
+
         # Create a map of filename -> list of full paths
         file_map = defaultdict(list)
         for path in result.stdout.splitlines():
             if path:
                 filename = os.path.basename(path)
                 file_map[filename].append(path)
-        
+
         logging.info(f"Built file map with {len(file_map)} unique filenames")
         return file_map
 
@@ -647,20 +750,26 @@ def update_media_locations():
                 else:
                     # Multiple matches - try to find best match
                     # First try exact folder match
-                    direct_path = os.path.join(zurg_all_folder, filled_by_file, filled_by_file)
+                    direct_path = os.path.join(
+                        zurg_all_folder, filled_by_file, filled_by_file
+                    )
                     if direct_path in paths:
                         updates.append((direct_path, item_id))
                     else:
                         # Just use the first match
                         updates.append((paths[0], item_id))
                         if len(paths) > 1:
-                            logging.debug(f"Multiple matches found for {filled_by_file}, using {paths[0]}")
+                            logging.debug(
+                                f"Multiple matches found for {filled_by_file}, using {paths[0]}"
+                            )
             else:
-                logging.error(f"Could not find location for item {item_id} with file {filled_by_file}")
-        
+                logging.error(
+                    f"Could not find location for item {item_id} with file {filled_by_file}"
+                )
+
         return updates
 
-    zurg_all_folder = get_setting('File Management', 'zurg_all_folder')
+    zurg_all_folder = get_setting("File Management", "zurg_all_folder")
     if not zurg_all_folder:
         logging.error("zurg_all_folder not set in settings")
         return
@@ -675,13 +784,15 @@ def update_media_locations():
         logging.info(f"Built file map in {time() - start_time:.1f} seconds")
 
         # Get all media items that need updating
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, filled_by_file, type 
             FROM media_items 
             WHERE filled_by_file IS NOT NULL 
             AND (location_on_disk IS NULL OR location_on_disk = '')
             AND type != 'movie'
-        """)
+        """
+        )
         items = cursor.fetchall()
         total_items = len(items)
         logging.info(f"Found {total_items} items to process")
@@ -689,17 +800,17 @@ def update_media_locations():
         # Process items in parallel batches
         start_time = time()
         all_updates = []
-        
+
         # Split items into batches
-        batches = [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
-        
+        batches = [items[i : i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Submit all batches to the thread pool
             future_to_batch = {
-                executor.submit(process_batch, batch, file_map, zurg_all_folder): batch 
+                executor.submit(process_batch, batch, file_map, zurg_all_folder): batch
                 for batch in batches
             }
-            
+
             # Process completed batches
             for future in as_completed(future_to_batch):
                 batch = future_to_batch[future]
@@ -709,20 +820,24 @@ def update_media_locations():
                         # Execute database updates
                         cursor.executemany(
                             "UPDATE media_items SET location_on_disk = ? WHERE id = ?",
-                            updates
+                            updates,
                         )
                         conn.commit()
                         processed = len(updates)
                         all_updates.extend(updates)
                         elapsed = time() - start_time
                         items_per_sec = len(all_updates) / elapsed if elapsed > 0 else 0
-                        logging.info(f"Progress: {len(all_updates)}/{total_items} items ({items_per_sec:.1f} items/sec)")
+                        logging.info(
+                            f"Progress: {len(all_updates)}/{total_items} items ({items_per_sec:.1f} items/sec)"
+                        )
                 except Exception as e:
                     logging.error(f"Error processing batch: {str(e)}")
 
         elapsed = time() - start_time
         items_per_sec = total_items / elapsed if elapsed > 0 else 0
-        logging.info(f"Finished updating media locations. Processed {total_items} items in {elapsed:.1f} seconds ({items_per_sec:.1f} items/sec)")
+        logging.info(
+            f"Finished updating media locations. Processed {total_items} items in {elapsed:.1f} seconds ({items_per_sec:.1f} items/sec)"
+        )
         logging.info(f"Successfully updated {len(all_updates)} items")
 
     except Exception as e:
@@ -731,50 +846,63 @@ def update_media_locations():
     finally:
         conn.close()
 
+
 def open_log_file():
-    log_dir = os.environ.get('USER_LOGS', '/user/logs')
-    log_file_path = os.path.join(log_dir, 'debug.log')
+    log_dir = os.environ.get("USER_LOGS", "/user/logs")
+    log_file_path = os.path.join(log_dir, "debug.log")
 
     if os.path.exists(log_file_path):
         try:
-            if platform.system() == 'Windows':
+            if platform.system() == "Windows":
                 os.startfile(log_file_path)
-            elif platform.system() == 'Darwin':
-                subprocess.call(['open', log_file_path])
+            elif platform.system() == "Darwin":
+                subprocess.call(["open", log_file_path])
             else:
-                subprocess.call(['xdg-open', log_file_path])
+                subprocess.call(["xdg-open", log_file_path])
         except Exception as e:
             logging.error(f"Failed to open log file: {e}")
     else:
         logging.error("Log file does not exist.")
 
+
 def fix_notification_settings():
     """Check and fix notification settings during startup."""
     try:
         from utilities.settings import load_config, save_config
+
         config = load_config()
         needs_update = False
 
-        if 'Notifications' in config and config['Notifications']:
-            for notification_id, notification_config in config['Notifications'].items():
+        if "Notifications" in config and config["Notifications"]:
+            for notification_id, notification_config in config["Notifications"].items():
                 if notification_config is not None:
-                    if 'notify_on' not in notification_config or not notification_config['notify_on']:
+                    if (
+                        "notify_on" not in notification_config
+                        or not notification_config["notify_on"]
+                    ):
                         needs_update = True
                         break
 
         if needs_update:
-            logging.info("Found notifications with missing or empty notify_on settings, fixing...")
-            port = int(os.environ.get('CLI_DEBRID_PORT', 5000))
+            logging.info(
+                "Found notifications with missing or empty notify_on settings, fixing..."
+            )
+            port = int(os.environ.get("CLI_DEBRID_PORT", 5000))
             try:
-                response = requests.post(f'http://localhost:{port}/notifications/update_defaults')
+                response = requests.post(
+                    f"http://localhost:{port}/notifications/update_defaults"
+                )
                 if response.status_code == 200:
                     logging.info("Successfully updated notification defaults")
                 else:
-                    logging.error(f"Failed to update notification defaults: {response.text}")
+                    logging.error(
+                        f"Failed to update notification defaults: {response.text}"
+                    )
             except requests.RequestException as e:
                 logging.error(f"Error updating notification defaults: {e}")
     except Exception as e:
         logging.error(f"Error checking notification settings: {e}")
+
 
 def verify_database_health():
     """
@@ -784,50 +912,54 @@ def verify_database_health():
     logging.info("Skipping health verification - task will periodically verify health.")
     return True
     logging.info("Verifying database health...")
-    
+
     # Get database paths
-    db_content_dir = os.environ.get('USER_DB_CONTENT', '/user/db_content')
-    media_items_path = os.path.join(db_content_dir, 'media_items.db')
-    cli_battery_path = os.path.join(db_content_dir, 'cli_battery.db')
-    
+    db_content_dir = os.environ.get("USER_DB_CONTENT", "/user/db_content")
+    media_items_path = os.path.join(db_content_dir, "media_items.db")
+    cli_battery_path = os.path.join(db_content_dir, "cli_battery.db")
+
     def check_db_health(db_path, db_name):
         if not os.path.exists(db_path):
-            logging.warning(f"{db_name} does not exist, will be created during initialization")
+            logging.warning(
+                f"{db_name} does not exist, will be created during initialization"
+            )
             return True
-            
+
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
+
             # Try to perform a simple query
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            
+
             # Verify database integrity
             cursor.execute("PRAGMA integrity_check")
             result = cursor.fetchone()
-            
+
             cursor.close()
             conn.close()
-            
+
             if result[0] != "ok":
                 raise sqlite3.DatabaseError(f"Integrity check failed: {result[0]}")
-                
+
             logging.info(f"{db_name} health check passed")
             return True
-            
+
         except sqlite3.DatabaseError as e:
             logging.error(f"{db_name} is corrupted: {str(e)}")
-            
+
             # Create backup of corrupted database
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = f"{db_path}.corrupted_{timestamp}"
             try:
                 shutil.copy2(db_path, backup_path)
                 logging.info(f"Created backup of corrupted {db_name} at {backup_path}")
             except Exception as backup_error:
-                logging.error(f"Failed to create backup of corrupted {db_name}: {str(backup_error)}")
-            
+                logging.error(
+                    f"Failed to create backup of corrupted {db_name}: {str(backup_error)}"
+                )
+
             # Delete corrupted database
             try:
                 os.remove(db_path)
@@ -835,23 +967,24 @@ def verify_database_health():
             except Exception as del_error:
                 logging.error(f"Failed to remove corrupted {db_name}: {str(del_error)}")
                 return False
-            
+
             return True
-        
+
         except Exception as e:
             logging.error(f"Error checking {db_name} health: {str(e)}")
             return False
-    
+
     # Check both databases
     media_items_ok = check_db_health(media_items_path, "media_items.db")
     cli_battery_ok = check_db_health(cli_battery_path, "cli_battery.db")
-    
+
     if not media_items_ok or not cli_battery_ok:
         logging.error("Database health check failed")
         return False
-    
+
     logging.info("Database health check completed successfully")
     return True
+
 
 def migrate_upgrade_rationale():
     """
@@ -862,16 +995,19 @@ def migrate_upgrade_rationale():
     updated_count = 0
     try:
         from database.core import get_db_connection
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         # Find entries with the specific rationale pattern
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT id, rationale 
             FROM torrent_additions 
             WHERE rationale LIKE 'Upgrading from version % to None'
-        """)
-        
+        """
+        )
+
         rows_to_update = []
         for row_id, old_rationale in cursor.fetchall():
             try:
@@ -879,26 +1015,37 @@ def migrate_upgrade_rationale():
                 # Example: "Upgrading from version 1080p to None"
                 # prefix = "Upgrading from version " (23 chars)
                 # suffix = " to None" (8 chars)
-                version_part = old_rationale[23:-8] 
-                
+                version_part = old_rationale[23:-8]
+
                 # Construct the new rationale
                 new_rationale = f"Upgrading version {version_part}"
                 rows_to_update.append((new_rationale, row_id))
             except Exception as e:
-                logging.warning(f"Could not process rationale migration for row ID {row_id}: {e}")
+                logging.warning(
+                    f"Could not process rationale migration for row ID {row_id}: {e}"
+                )
 
         if rows_to_update:
-            logging.info(f"Found {len(rows_to_update)} torrent tracking entries to migrate rationale...")
-            cursor.executemany("""
+            logging.info(
+                f"Found {len(rows_to_update)} torrent tracking entries to migrate rationale..."
+            )
+            cursor.executemany(
+                """
                 UPDATE torrent_additions 
                 SET rationale = ? 
                 WHERE id = ?
-            """, rows_to_update)
+            """,
+                rows_to_update,
+            )
             conn.commit()
             updated_count = cursor.rowcount
-            logging.info(f"Successfully migrated rationale for {updated_count} entries.")
+            logging.info(
+                f"Successfully migrated rationale for {updated_count} entries."
+            )
         else:
-            logging.info("No torrent tracking entries found needing rationale migration.")
+            logging.info(
+                "No torrent tracking entries found needing rationale migration."
+            )
 
     except sqlite3.Error as e:
         logging.error(f"Database error during rationale migration: {e}")
@@ -910,6 +1057,7 @@ def migrate_upgrade_rationale():
         if conn:
             conn.close()
 
+
 def migrate_task_toggles():
     """
     Ensures task_toggles.json exists and contains the migration version marker.
@@ -917,40 +1065,51 @@ def migrate_task_toggles():
     """
     MIGRATION_VERSION = "0.6.34"
     VERSION_KEY = "_migration_version"
-    
+
     try:
         import os
         import json
-        
-        db_content_dir = os.environ.get('USER_DB_CONTENT', '/user/db_content')
-        toggles_file_path = os.path.join(db_content_dir, 'task_toggles.json')
-        
+
+        db_content_dir = os.environ.get("USER_DB_CONTENT", "/user/db_content")
+        toggles_file_path = os.path.join(db_content_dir, "task_toggles.json")
+
         needs_reset = False
         current_data = {}
 
         if os.path.exists(toggles_file_path):
             try:
-                with open(toggles_file_path, 'r') as f:
+                with open(toggles_file_path, "r") as f:
                     current_data = json.load(f)
-                if not isinstance(current_data, dict) or current_data.get(VERSION_KEY) != MIGRATION_VERSION:
-                    logging.info(f"Task toggles file found but missing or incorrect version marker ({current_data.get(VERSION_KEY)} != {MIGRATION_VERSION}). Resetting.")
+                if (
+                    not isinstance(current_data, dict)
+                    or current_data.get(VERSION_KEY) != MIGRATION_VERSION
+                ):
+                    logging.info(
+                        f"Task toggles file found but missing or incorrect version marker ({current_data.get(VERSION_KEY)} != {MIGRATION_VERSION}). Resetting."
+                    )
                     needs_reset = True
             except json.JSONDecodeError:
-                logging.warning(f"Task toggles file exists but is corrupted. Resetting.")
+                logging.warning(
+                    f"Task toggles file exists but is corrupted. Resetting."
+                )
                 needs_reset = True
             except Exception as e:
-                 logging.error(f"Error reading task toggles file: {e}. Resetting.")
-                 needs_reset = True
+                logging.error(f"Error reading task toggles file: {e}. Resetting.")
+                needs_reset = True
         else:
-            logging.info(f"Task toggles file not found. Creating with version {MIGRATION_VERSION}.")
+            logging.info(
+                f"Task toggles file not found. Creating with version {MIGRATION_VERSION}."
+            )
             needs_reset = True
 
         if needs_reset:
             try:
-                with open(toggles_file_path, 'w') as f:
+                with open(toggles_file_path, "w") as f:
                     json.dump({VERSION_KEY: MIGRATION_VERSION}, f, indent=4)
                     # Log SUCCESS only *after* successful dump and *before* exiting 'with'
-                    logging.info(f"Successfully reset task_toggles.json with version {MIGRATION_VERSION}.")
+                    logging.info(
+                        f"Successfully reset task_toggles.json with version {MIGRATION_VERSION}."
+                    )
             except Exception as e:
                 # This log will catch errors during open() or json.dump()
                 logging.error(f"Failed to write reset task toggles file: {e}")
@@ -960,6 +1119,7 @@ def migrate_task_toggles():
     except Exception as e:
         logging.error(f"Unexpected error during task toggles migration check: {e}")
 
+
 def migrate_content_source_versions():
     """
     Verifies that all versions assigned to content sources are still active
@@ -967,59 +1127,79 @@ def migrate_content_source_versions():
     """
     try:
         from queues.config_manager import load_config, save_config
+
         config = load_config()
         config_updated = False
 
         # Get the set of currently active/defined version names
-        active_versions = set(config.get('Scraping', {}).get('versions', {}).keys())
-        
+        active_versions = set(config.get("Scraping", {}).get("versions", {}).keys())
+
         if not active_versions:
-            logging.debug("No active scraping versions found. Skipping content source version migration.")
+            logging.debug(
+                "No active scraping versions found. Skipping content source version migration."
+            )
             return
 
-        if 'Content Sources' in config and isinstance(config.get('Content Sources'), dict):
-            content_sources = config['Content Sources']
-            
+        if "Content Sources" in config and isinstance(
+            config.get("Content Sources"), dict
+        ):
+            content_sources = config["Content Sources"]
+
             # Iterate over a copy of items as we might modify the dict
             for source_id, source_config in list(content_sources.items()):
-                if isinstance(source_config, dict) and 'versions' in source_config:
-                    source_versions = source_config['versions']
-                    
+                if isinstance(source_config, dict) and "versions" in source_config:
+                    source_versions = source_config["versions"]
+
                     # Handle dictionary format {version_name: enabled_boolean}
                     if isinstance(source_versions, dict):
                         # Find versions in the content source that are no longer active
-                        inactive_keys = [key for key in source_versions if key not in active_versions]
+                        inactive_keys = [
+                            key for key in source_versions if key not in active_versions
+                        ]
                         if inactive_keys:
                             config_updated = True
                             for key in inactive_keys:
                                 del source_versions[key]
-                                logging.info(f"Migration: Removed inactive version '{key}' from Content Source '{source_id}'.")
-                    
+                                logging.info(
+                                    f"Migration: Removed inactive version '{key}' from Content Source '{source_id}'."
+                                )
+
                     # Handle list format [version_name, ...]
                     elif isinstance(source_versions, list):
                         original_count = len(source_versions)
                         # Filter the list to keep only active versions
-                        active_source_versions = [v for v in source_versions if v in active_versions]
+                        active_source_versions = [
+                            v for v in source_versions if v in active_versions
+                        ]
                         if len(active_source_versions) < original_count:
                             config_updated = True
-                            source_config['versions'] = active_source_versions
+                            source_config["versions"] = active_source_versions
                             removed_count = original_count - len(active_source_versions)
-                            logging.info(f"Migration: Removed {removed_count} inactive version(s) from Content Source '{source_id}'.")
+                            logging.info(
+                                f"Migration: Removed {removed_count} inactive version(s) from Content Source '{source_id}'."
+                            )
 
         if config_updated:
             save_config(config)
-            logging.info("Successfully migrated Content Sources to remove inactive versions.")
+            logging.info(
+                "Successfully migrated Content Sources to remove inactive versions."
+            )
         else:
             logging.info("Content source versions are all active. No migration needed.")
 
     except Exception as e:
-        logging.error(f"Unexpected error during content source version migration: {e}", exc_info=True)
+        logging.error(
+            f"Unexpected error during content source version migration: {e}",
+            exc_info=True,
+        )
+
 
 def migrate_theatrical_release_dates():
     """
     Migrates theatrical release dates for all movie items using the direct API.
     Runs asynchronously in a background thread to avoid blocking startup.
     """
+
     def _migrate_theatrical_release_dates_async():
         try:
             from database.core import get_db_connection
@@ -1027,12 +1207,14 @@ def migrate_theatrical_release_dates():
             from metadata.metadata import get_theatrical_release_date
             import time
             import threading
-            
-            logging.info("Starting theatrical release date migration for movies (background thread)...")
-            
+
+            logging.info(
+                "Starting theatrical release date migration for movies (background thread)..."
+            )
+
             conn = get_db_connection()
             cursor = conn.cursor()
-            
+
             # Get all movie items that don't have theatrical_release_date set
             query = """
                 SELECT id, imdb_id, title, year 
@@ -1044,52 +1226,73 @@ def migrate_theatrical_release_dates():
             """
             logging.debug(f"Executing query: {query}")
             cursor.execute(query)
-            
+
             movies_to_update = cursor.fetchall()
             total_movies = len(movies_to_update)
-            
+
             logging.debug(f"Query returned {total_movies} movies")
-            
+
             # Debug: Check a few sample movies to see their checked status
             if movies_to_update:
-                sample_ids = [movies_to_update[0][0], movies_to_update[1][0] if len(movies_to_update) > 1 else None]
+                sample_ids = [
+                    movies_to_update[0][0],
+                    movies_to_update[1][0] if len(movies_to_update) > 1 else None,
+                ]
                 for item_id in sample_ids:
                     if item_id:
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             SELECT id, title, theatrical_release_date, theatrical_release_date_checked 
                             FROM media_items WHERE id = ?
-                        """, (item_id,))
+                        """,
+                            (item_id,),
+                        )
                         result = cursor.fetchone()
                         if result:
-                            logging.warning(f"Sample movie from query - ID: {result[0]}, Title: {result[1]}, Theatrical: {result[2]}, Checked: {result[3]} (type: {type(result[3])})")
-            
+                            logging.warning(
+                                f"Sample movie from query - ID: {result[0]}, Title: {result[1]}, Theatrical: {result[2]}, Checked: {result[3]} (type: {type(result[3])})"
+                            )
+
             # Debug: Check the actual values in the database
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT theatrical_release_date_checked, COUNT(*) 
                 FROM media_items 
                 WHERE type = 'movie'
                 GROUP BY theatrical_release_date_checked
-            """)
+            """
+            )
             checked_counts = cursor.fetchall()
-            logging.info(f"Database check - theatrical_release_date_checked values: {checked_counts}")
-            
+            logging.info(
+                f"Database check - theatrical_release_date_checked values: {checked_counts}"
+            )
+
             if total_movies == 0:
-                logging.info("No movies found needing theatrical release date migration.")
+                logging.info(
+                    "No movies found needing theatrical release date migration."
+                )
                 return
-            
+
             # Log a few sample movies to verify the data
             sample_movies = movies_to_update[:3]
             logging.info(f"Sample movies to process: {sample_movies}")
-            
+
             # Debug: Check if any of the sample movies already have theatrical release dates
             for item_id, imdb_id, title, year in sample_movies:
-                cursor.execute("SELECT theatrical_release_date FROM media_items WHERE id = ?", (item_id,))
+                cursor.execute(
+                    "SELECT theatrical_release_date FROM media_items WHERE id = ?",
+                    (item_id,),
+                )
                 result = cursor.fetchone()
                 if result and result[0]:
-                    logging.warning(f"Movie {title} (ID: {item_id}) already has theatrical_release_date: {result[0]} - this shouldn't be in the query results!")
+                    logging.warning(
+                        f"Movie {title} (ID: {item_id}) already has theatrical_release_date: {result[0]} - this shouldn't be in the query results!"
+                    )
                 else:
-                    logging.debug(f"Movie {title} (ID: {item_id}) has no theatrical_release_date as expected")
-            
+                    logging.debug(
+                        f"Movie {title} (ID: {item_id}) has no theatrical_release_date as expected"
+                    )
+
             # Test the API functions with a known movie first
             test_imdb_id = "tt0111161"  # The Shawshank Redemption
             logging.info(f"Testing API functions with known movie {test_imdb_id}...")
@@ -1097,203 +1300,265 @@ def migrate_theatrical_release_dates():
                 test_metadata, test_source = DirectAPI.get_movie_metadata(test_imdb_id)
                 if test_metadata:
                     logging.info(f"DirectAPI test successful for {test_imdb_id}")
-                    logging.debug(f"Test metadata keys: {list(test_metadata.keys()) if isinstance(test_metadata, dict) else 'Not a dict'}")
+                    logging.debug(
+                        f"Test metadata keys: {list(test_metadata.keys()) if isinstance(test_metadata, dict) else 'Not a dict'}"
+                    )
                 else:
-                    logging.warning(f"DirectAPI test failed for {test_imdb_id} - no metadata returned")
-                
+                    logging.warning(
+                        f"DirectAPI test failed for {test_imdb_id} - no metadata returned"
+                    )
+
                 test_theatrical = get_theatrical_release_date(test_imdb_id)
                 if test_theatrical:
-                    logging.info(f"Theatrical date test successful for {test_imdb_id}: {test_theatrical}")
+                    logging.info(
+                        f"Theatrical date test successful for {test_imdb_id}: {test_theatrical}"
+                    )
                 else:
-                    logging.warning(f"Theatrical date test failed for {test_imdb_id} - no date returned")
+                    logging.warning(
+                        f"Theatrical date test failed for {test_imdb_id} - no date returned"
+                    )
             except Exception as e:
-                logging.error(f"API test failed for {test_imdb_id}: {str(e)}", exc_info=True)
-            
-            logging.info(f"Found {total_movies} movies to update with theatrical release dates (background processing).")
-            
+                logging.error(
+                    f"API test failed for {test_imdb_id}: {str(e)}", exc_info=True
+                )
+
+            logging.info(
+                f"Found {total_movies} movies to update with theatrical release dates (background processing)."
+            )
+
             # Test: Check how many movies are already marked as checked
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM media_items 
                 WHERE type = 'movie' 
                 AND theatrical_release_date_checked = 1
-            """)
+            """
+            )
             already_checked = cursor.fetchone()[0]
             logging.info(f"Movies already marked as checked: {already_checked}")
-            
+
             # Test: Check total movie count
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM media_items 
                 WHERE type = 'movie'
-            """)
+            """
+            )
             total_movies_in_db = cursor.fetchone()[0]
             logging.info(f"Total movies in database: {total_movies_in_db}")
-            
+
             # Test: Check how many movies already have theatrical release dates
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM media_items 
                 WHERE type = 'movie' 
                 AND theatrical_release_date IS NOT NULL
-            """)
+            """
+            )
             movies_with_theatrical = cursor.fetchone()[0]
-            logging.info(f"Movies with theatrical release dates: {movies_with_theatrical}")
-            
+            logging.info(
+                f"Movies with theatrical release dates: {movies_with_theatrical}"
+            )
+
             # Thread-safe counters
             updated_count = 0
             error_count = 0
             counter_lock = threading.Lock()
-            
+
             # Create a separate connection for each update to avoid blocking
             def update_movie_theatrical_date(item_id, imdb_id, title, year):
                 nonlocal updated_count, error_count
                 try:
                     logging.debug(f"Starting processing for {title} ({imdb_id})")
-                    
+
                     # Get movie metadata from direct API
                     logging.debug(f"Attempting to get metadata for {title} ({imdb_id})")
                     metadata, source = DirectAPI.get_movie_metadata(imdb_id)
-                    
+
                     if not metadata:
                         logging.warning(f"No metadata found for {title} ({imdb_id})")
                         # Mark as checked even if no metadata found
                         update_conn = get_db_connection()
                         update_cursor = update_conn.cursor()
                         try:
-                            update_cursor.execute("""
+                            update_cursor.execute(
+                                """
                                 UPDATE media_items 
                                 SET theatrical_release_date_checked = 1 
                                 WHERE id = ?
-                            """, (item_id,))
+                            """,
+                                (item_id,),
+                            )
                             update_conn.commit()
-                            logging.debug(f"Marked {title} ({imdb_id}) as checked (no metadata)")
+                            logging.debug(
+                                f"Marked {title} ({imdb_id}) as checked (no metadata)"
+                            )
                         finally:
                             update_conn.close()
                         with counter_lock:
                             error_count += 1
                         return False
-                    
-                    logging.debug(f"Got metadata for {title} ({imdb_id}) - source: {source}")
-                    
+
+                    logging.debug(
+                        f"Got metadata for {title} ({imdb_id}) - source: {source}"
+                    )
+
                     # Use our new function to get theatrical release date
-                    logging.debug(f"Attempting to get theatrical release date for {title} ({imdb_id})")
+                    logging.debug(
+                        f"Attempting to get theatrical release date for {title} ({imdb_id})"
+                    )
                     theatrical_date = get_theatrical_release_date(imdb_id)
-                    
-                    logging.debug(f"Theatrical date result for {title} ({imdb_id}): {theatrical_date}")
-                    
+
+                    logging.debug(
+                        f"Theatrical date result for {title} ({imdb_id}): {theatrical_date}"
+                    )
+
                     # Create a new connection for this update to avoid blocking
                     update_conn = get_db_connection()
                     update_cursor = update_conn.cursor()
                     try:
                         if theatrical_date:
-                            logging.debug(f"Found theatrical date {theatrical_date} for {title} ({imdb_id})")
+                            logging.debug(
+                                f"Found theatrical date {theatrical_date} for {title} ({imdb_id})"
+                            )
                             # Update with theatrical date and mark as checked
-                            update_cursor.execute("""
+                            update_cursor.execute(
+                                """
                                 UPDATE media_items 
                                 SET theatrical_release_date = ?, theatrical_release_date_checked = 1
                                 WHERE id = ?
-                            """, (theatrical_date, item_id))
+                            """,
+                                (theatrical_date, item_id),
+                            )
                             update_conn.commit()
                             with counter_lock:
                                 updated_count += 1
-                            logging.debug(f"Successfully updated theatrical date for {title} ({imdb_id})")
+                            logging.debug(
+                                f"Successfully updated theatrical date for {title} ({imdb_id})"
+                            )
                             return True
                         else:
-                            logging.debug(f"No theatrical date found for {title} ({imdb_id}) - marking as checked")
+                            logging.debug(
+                                f"No theatrical date found for {title} ({imdb_id}) - marking as checked"
+                            )
                             # Mark as checked even if no theatrical date found
-                            update_cursor.execute("""
+                            update_cursor.execute(
+                                """
                                 UPDATE media_items 
                                 SET theatrical_release_date_checked = 1 
                                 WHERE id = ?
-                            """, (item_id,))
+                            """,
+                                (item_id,),
+                            )
                             update_conn.commit()
-                            logging.debug(f"Marked {title} ({imdb_id}) as checked (no theatrical date)")
+                            logging.debug(
+                                f"Marked {title} ({imdb_id}) as checked (no theatrical date)"
+                            )
                             # Don't count this as an error - it's normal for many movies
                             return True
                     finally:
                         update_conn.close()
-                    
+
                 except Exception as e:
-                    logging.error(f"Error processing movie {title} ({imdb_id}): {str(e)}", exc_info=True)
+                    logging.error(
+                        f"Error processing movie {title} ({imdb_id}): {str(e)}",
+                        exc_info=True,
+                    )
                     with counter_lock:
                         error_count += 1
                     return False
-            
+
             # Process movies in batches to avoid overwhelming the system
             batch_size = 5  # Process 5 movies at a time
             for i in range(0, len(movies_to_update), batch_size):
-                batch = movies_to_update[i:i + batch_size]
-                
+                batch = movies_to_update[i : i + batch_size]
+
                 # Process batch with threading
                 threads = []
                 for item_id, imdb_id, title, year in batch:
                     thread = threading.Thread(
-                        target=lambda item_id=item_id, imdb_id=imdb_id, title=title, year=year: 
-                        update_movie_theatrical_date(item_id, imdb_id, title, year)
+                        target=lambda item_id=item_id, imdb_id=imdb_id, title=title, year=year: update_movie_theatrical_date(
+                            item_id, imdb_id, title, year
+                        )
                     )
                     thread.daemon = True
                     thread.start()
                     threads.append(thread)
-                
+
                 # Wait for batch to complete
                 for thread in threads:
                     thread.join()
-                
+
                 # Log progress every batch
                 processed = min(i + batch_size, total_movies)
                 with counter_lock:
                     current_updated = updated_count
                     current_errors = error_count
-                logging.info(f"Theatrical release migration progress: {processed}/{total_movies} (updated: {current_updated}, errors: {current_errors})")
-                
+                logging.info(
+                    f"Theatrical release migration progress: {processed}/{total_movies} (updated: {current_updated}, errors: {current_errors})"
+                )
+
                 # Small delay between batches to avoid overwhelming APIs
                 time.sleep(0.5)
-            
+
             with counter_lock:
                 final_updated = updated_count
                 final_errors = error_count
-            logging.info(f"Theatrical release date migration completed (background). Updated: {final_updated}, Processed: {total_movies - final_errors}, Errors: {final_errors}, Total: {total_movies}")
-            
+            logging.info(
+                f"Theatrical release date migration completed (background). Updated: {final_updated}, Processed: {total_movies - final_errors}, Errors: {final_errors}, Total: {total_movies}"
+            )
+
             # Test: Check how many movies are now marked as checked
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM media_items 
                 WHERE type = 'movie' 
                 AND theatrical_release_date_checked = 1
-            """)
+            """
+            )
             now_checked = cursor.fetchone()[0]
-            logging.info(f"Movies now marked as checked: {now_checked} (increase: {now_checked - already_checked})")
-            
+            logging.info(
+                f"Movies now marked as checked: {now_checked} (increase: {now_checked - already_checked})"
+            )
+
         except Exception as e:
-            logging.error(f"Error during theatrical release date migration (background): {str(e)}", exc_info=True)
+            logging.error(
+                f"Error during theatrical release date migration (background): {str(e)}",
+                exc_info=True,
+            )
         finally:
-            if 'conn' in locals():
+            if "conn" in locals():
                 conn.close()
-    
+
     # Start the migration in a background thread
     migration_thread = threading.Thread(target=_migrate_theatrical_release_dates_async)
     migration_thread.daemon = True
     migration_thread.start()
     logging.info("Theatrical release date migration started in background thread.")
 
+
 def main():
     # Remove global program_runner from here as well
-    global metadata_process 
-    metadata_process = None 
+    global metadata_process
+    metadata_process = None
 
     logging.info("Starting the program...")
 
     # --- START EDIT: Import flask_app and _execute_start_program here ---
-    from routes.extensions import app as flask_app 
+    from routes.extensions import app as flask_app
     from routes.program_operation_routes import _execute_start_program
     import os
+
     # --- END EDIT ---
 
     setup_directories()
     backup_config()
     backup_database()
-    
+
     # Delete not wanted files on startup
     try:
-        db_content_dir = os.environ.get('USER_DB_CONTENT', '/user/db_content')
-        not_wanted_files = ['not_wanted_magnets.pkl', 'not_wanted_urls.pkl']
+        db_content_dir = os.environ.get("USER_DB_CONTENT", "/user/db_content")
+        not_wanted_files = ["not_wanted_magnets.pkl", "not_wanted_urls.pkl"]
         for not_wanted_file in not_wanted_files:
             file_path = os.path.join(db_content_dir, not_wanted_file)
             if os.path.exists(file_path):
@@ -1301,7 +1566,7 @@ def main():
                 logging.info(f"Deleted not wanted file on startup: {file_path}")
     except Exception as e:
         logging.warning(f"Could not delete not wanted files on startup: {str(e)}")
-    
+
     # Purge content source cache files on startup
     # try:
     #     logging.info("Purging content source cache files on startup...")
@@ -1319,12 +1584,14 @@ def main():
     #     logging.info(f"Deleted {deleted_count} content source cache files.")
     # except Exception as e:
     #     logging.error(f"Error purging content source cache files: {str(e)}")
-    
+
     # Verify database health before proceeding
     if not verify_database_health():
-        logging.error("Database health check failed. Please check the logs and resolve any issues.")
+        logging.error(
+            "Database health check failed. Please check the logs and resolve any issues."
+        )
         return
-    
+
     # Run specific data migrations first if they don't depend on full schema being present
     # (Keep these if they are safe before full schema verify/migrate)
     migrate_upgrade_rationale()
@@ -1334,11 +1601,11 @@ def main():
     try:
         logging.info("Running database schema verification and migration...")
         # This call implicitly runs migrate_schema() which creates the notifications table
-        schema_management.verify_database() 
+        schema_management.verify_database()
         logging.info("Database schema verification and migration completed.")
     except Exception as e:
         logging.critical(f"Database verification/migration failed: {e}", exc_info=True)
-        return # Stop if DB setup fails
+        return  # Stop if DB setup fails
 
     # Run content source version migration after main schema is ready
     migrate_content_source_versions()
@@ -1348,8 +1615,9 @@ def main():
 
     # Initialize statistics tables/indexes AFTER main schema is verified
     try:
-        from database.statistics import get_cached_download_stats # Moved import local
-        from database.statistics import update_statistics_summary # Moved import local
+        from database.statistics import get_cached_download_stats  # Moved import local
+        from database.statistics import update_statistics_summary  # Moved import local
+
         # create_statistics_indexes() # Already called within verify_database via migrate_schema potentially, or needs specific call
         # schema_management.create_statistics_summary_table() # Already called within verify_database via migrate_schema potentially
         logging.info("Initializing statistics summary...")
@@ -1363,266 +1631,324 @@ def main():
         logging.error(f"Error during statistics summary/cache initialization: {e}")
 
     from utilities.settings import ensure_settings_file, get_setting, set_setting
+
     # from database import verify_database # No longer needed here
     from database.not_wanted_magnets import validate_not_wanted_entries
     from queues.config_manager import load_config, save_config
-    
+
     # Set Debug.max_upgrading_score to 0.0 if missing
-    debug_settings = get_setting('Debug')
-    if 'max_upgrading_score' not in debug_settings:
-        set_setting('Debug', 'max_upgrading_score', 0.0)
+    debug_settings = get_setting("Debug")
+    if "max_upgrading_score" not in debug_settings:
+        set_setting("Debug", "max_upgrading_score", 0.0)
         logging.info("Set missing Debug.max_upgrading_score to default value 0.0")
 
     # Set up notification handlers NOW THAT DB IS READY
     setup_crash_handler()
     register_shutdown_handler()
-    register_startup_handler() # This should now succeed
+    register_startup_handler()  # This should now succeed
 
     # Add migration for media_type setting
     config = load_config()
 
     # --- MIGRATION: Set default monitor_mode for enabled Collected content sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         updated = False
-        for source_id, source_config in config['Content Sources'].items():
+        for source_id, source_config in config["Content Sources"].items():
             # Check if this is a Collected content source and is enabled
             if (
-                (source_id == 'Collected' or source_id.startswith('Collected_'))
+                (source_id == "Collected" or source_id.startswith("Collected_"))
                 and isinstance(source_config, dict)
-                and source_config.get('enabled', False)
+                and source_config.get("enabled", False)
             ):
-                if 'monitor_mode' not in source_config:
-                    source_config['monitor_mode'] = 'Monitor All Episodes'
+                if "monitor_mode" not in source_config:
+                    source_config["monitor_mode"] = "Monitor All Episodes"
                     updated = True
-                    logging.info(f"Set default monitor_mode for {source_id} to 'Monitor All Episodes'")
+                    logging.info(
+                        f"Set default monitor_mode for {source_id} to 'Monitor All Episodes'"
+                    )
         if updated:
             save_config(config)
-            logging.info("Saved config after setting default monitor_mode for Collected content sources.")
+            logging.info(
+                "Saved config after setting default monitor_mode for Collected content sources."
+            )
 
     # Batch set deprecated settings
-    set_setting('Debug', 'skip_initial_plex_update', False)
-    set_setting('Scraping', 'jackett_seeders_only', True)
-    set_setting('Scraping', 'enable_upgrading_cleanup', True)
-    set_setting('Sync Deletions', 'sync_deletions', True)
-    set_setting('Debrid Provider', 'provider', 'RealDebrid')
-    set_setting('Debug', 'rescrape_missing_files', False)
-    set_setting('Debug', 'anime_renaming_using_anidb', True)
-    set_setting('Debug', 'symlink_organize_by_type', True)
+    set_setting("Debug", "skip_initial_plex_update", False)
+    set_setting("Scraping", "jackett_seeders_only", True)
+    set_setting("Scraping", "enable_upgrading_cleanup", True)
+    set_setting("Sync Deletions", "sync_deletions", True)
+    set_setting("Debrid Provider", "provider", "RealDebrid")
+    set_setting("Debug", "rescrape_missing_files", False)
+    set_setting("Debug", "anime_renaming_using_anidb", True)
+    set_setting("Debug", "symlink_organize_by_type", True)
 
     # Add check for Hybrid uncached management setting
-    if get_setting('Scraping', 'uncached_content_handling') == 'Hybrid':
-        logging.info("Converting 'Hybrid' uncached content handling setting to 'None' with hybrid_mode=True")
-        set_setting('Scraping', 'uncached_content_handling', 'None')
-        set_setting('Scraping', 'hybrid_mode', True)
-    
+    if get_setting("Scraping", "uncached_content_handling") == "Hybrid":
+        logging.info(
+            "Converting 'Hybrid' uncached content handling setting to 'None' with hybrid_mode=True"
+        )
+        set_setting("Scraping", "uncached_content_handling", "None")
+        set_setting("Scraping", "hybrid_mode", True)
+
     # Get current settings to check if defaults need to be applied
-    scraping_settings = get_setting('Scraping')
-    debug_settings = get_setting('Debug')
-    
-    if 'disable_adult' not in scraping_settings:
-        set_setting('Scraping', 'disable_adult', True)
+    scraping_settings = get_setting("Scraping")
+    debug_settings = get_setting("Debug")
+
+    if "disable_adult" not in scraping_settings:
+        set_setting("Scraping", "disable_adult", True)
         logging.info("Setting default disable_adult to True")
 
-    if 'enable_plex_removal_caching' not in debug_settings:
-        set_setting('Debug', 'enable_plex_removal_caching', True)
+    if "enable_plex_removal_caching" not in debug_settings:
+        set_setting("Debug", "enable_plex_removal_caching", True)
         logging.info("Setting default enable_plex_removal_caching to True")
-    
-    if 'trakt_early_releases' not in scraping_settings:
-        set_setting('Scraping', 'trakt_early_releases', False)
+
+    if "trakt_early_releases" not in scraping_settings:
+        set_setting("Scraping", "trakt_early_releases", False)
         logging.info("Setting default trakt_early_releases to False")
-        
+
     # Initialize content_source_check_period if it doesn't exist
-    if 'content_source_check_period' not in debug_settings:
-        set_setting('Debug', 'content_source_check_period', {})
+    if "content_source_check_period" not in debug_settings:
+        set_setting("Debug", "content_source_check_period", {})
         logging.info("Initializing content_source_check_period as empty dictionary")
 
-    if get_setting('Debug', 'enabled_separate_anime_folders') is True:
-        set_setting('Debug', 'enable_separate_anime_folders', True)
+    if get_setting("Debug", "enabled_separate_anime_folders") is True:
+        set_setting("Debug", "enable_separate_anime_folders", True)
         # Remove the old setting key
         config = load_config()
-        if 'Debug' in config and 'enabled_separate_anime_folders' in config['Debug']:
-            del config['Debug']['enabled_separate_anime_folders']
+        if "Debug" in config and "enabled_separate_anime_folders" in config["Debug"]:
+            del config["Debug"]["enabled_separate_anime_folders"]
             save_config(config)
-        logging.info("Migrating enable_separate_anime_folders to True and removing old key")
+        logging.info(
+            "Migrating enable_separate_anime_folders to True and removing old key"
+        )
 
     # Migrate Emby settings to Emby/Jellyfin settings
     config = load_config()
-    if 'Debug' in config:
+    if "Debug" in config:
         emby_settings_updated = False
-        
+
         # Check for old 'emby_url' setting and migrate to 'emby_jellyfin_url'
-        if 'emby_url' in config['Debug']:
-            emby_url = config['Debug']['emby_url']
-            if 'emby_jellyfin_url' not in config['Debug'] or not config['Debug']['emby_jellyfin_url']:
-                config['Debug']['emby_jellyfin_url'] = emby_url
+        if "emby_url" in config["Debug"]:
+            emby_url = config["Debug"]["emby_url"]
+            if (
+                "emby_jellyfin_url" not in config["Debug"]
+                or not config["Debug"]["emby_jellyfin_url"]
+            ):
+                config["Debug"]["emby_jellyfin_url"] = emby_url
                 emby_settings_updated = True
                 logging.info(f"Migrating 'emby_url' to 'emby_jellyfin_url': {emby_url}")
             # Remove the old setting
-            del config['Debug']['emby_url']
+            del config["Debug"]["emby_url"]
             emby_settings_updated = True
-        
+
         # Check for old 'emby_token' setting and migrate to 'emby_jellyfin_token'
-        if 'emby_token' in config['Debug']:
-            emby_token = config['Debug']['emby_token']
-            if 'emby_jellyfin_token' not in config['Debug'] or not config['Debug']['emby_jellyfin_token']:
-                config['Debug']['emby_jellyfin_token'] = emby_token
+        if "emby_token" in config["Debug"]:
+            emby_token = config["Debug"]["emby_token"]
+            if (
+                "emby_jellyfin_token" not in config["Debug"]
+                or not config["Debug"]["emby_jellyfin_token"]
+            ):
+                config["Debug"]["emby_jellyfin_token"] = emby_token
                 emby_settings_updated = True
                 logging.info(f"Migrating 'emby_token' to 'emby_jellyfin_token'")
             # Remove the old setting
-            del config['Debug']['emby_token']
+            del config["Debug"]["emby_token"]
             emby_settings_updated = True
-        
+
         if emby_settings_updated:
             save_config(config)
-            logging.info("Successfully migrated Emby settings to Emby/Jellyfin settings")
+            logging.info(
+                "Successfully migrated Emby settings to Emby/Jellyfin settings"
+            )
 
     # Add migration for folder locations
-    if 'Debug' in config:
+    if "Debug" in config:
         updated = False
-        
+
         # Define the default folder names
         default_folders = {
-            'movies_folder_name': 'Movies',
-            'tv_shows_folder_name': 'TV Shows',
-            'anime_movies_folder_name': 'Anime Movies',
-            'anime_tv_shows_folder_name': 'Anime TV Shows'
+            "movies_folder_name": "Movies",
+            "tv_shows_folder_name": "TV Shows",
+            "anime_movies_folder_name": "Anime Movies",
+            "anime_tv_shows_folder_name": "Anime TV Shows",
         }
-        
+
         # Ensure all folder name keys exist with default values
         for folder_key, default_value in default_folders.items():
-            if folder_key not in config['Debug']:
-                config['Debug'][folder_key] = default_value
+            if folder_key not in config["Debug"]:
+                config["Debug"][folder_key] = default_value
                 updated = True
-                logging.info(f"Created missing folder key {folder_key} with default value: {default_value}")
-        
+                logging.info(
+                    f"Created missing folder key {folder_key} with default value: {default_value}"
+                )
+
         # Create a copy of the items to iterate over
-        debug_items = list(config['Debug'].items())
+        debug_items = list(config["Debug"].items())
         for key, value in debug_items:
-            if key.endswith('_folder_name'):
+            if key.endswith("_folder_name"):
                 # Get the base key without _folder_name
-                base_key = key.replace('_folder_name', '')
+                base_key = key.replace("_folder_name", "")
                 # Create new key by appending _folder_name
-                new_key = base_key + '_folder_name'
+                new_key = base_key + "_folder_name"
                 # Keep the existing value if it exists, otherwise use the default
-                if new_key in config['Debug']:
-                    config['Debug'][new_key] = config['Debug'][new_key]  # Preserve existing value
+                if new_key in config["Debug"]:
+                    config["Debug"][new_key] = config["Debug"][
+                        new_key
+                    ]  # Preserve existing value
                 else:
-                    config['Debug'][new_key] = default_folders.get(new_key, value)
+                    config["Debug"][new_key] = default_folders.get(new_key, value)
                 updated = True
-        
+
         if updated:
             save_config(config)
             logging.info("Successfully migrated folder name settings")
 
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         updated = False
-        for source_id, source_config in config['Content Sources'].items():
+        for source_id, source_config in config["Content Sources"].items():
             # Skip the Collected source as it doesn't use media_type
-            if source_id.startswith('Collected_'):
+            if source_id.startswith("Collected_"):
                 continue
-            
+
             # Check if media_type is missing
-            if 'media_type' not in source_config:
+            if "media_type" not in source_config:
                 # Create new ordered dict with desired key order
                 new_config = {}
                 # Copy existing keys except display_name
                 for key in source_config:
-                    if key != 'display_name':
+                    if key != "display_name":
                         new_config[key] = source_config[key]
                 # Add media_type before display_name
-                new_config['media_type'] = 'All'
+                new_config["media_type"] = "All"
                 # Add display_name last if it exists
-                if 'display_name' in source_config:
-                    new_config['display_name'] = source_config['display_name']
-                
+                if "display_name" in source_config:
+                    new_config["display_name"] = source_config["display_name"]
+
                 # Replace the old config with the new ordered one
-                config['Content Sources'][source_id] = new_config
-                logging.info(f"Adding default media_type 'All' to content source {source_id}")
+                config["Content Sources"][source_id] = new_config
+                logging.info(
+                    f"Adding default media_type 'All' to content source {source_id}"
+                )
                 updated = True
-        
+
         # Save the updated config if changes were made
         if updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include media_type setting")
+            logging.info(
+                "Successfully migrated content sources to include media_type setting"
+            )
 
     # Add require_physical_release to existing versions
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         modified = False
-        for version in config['Scraping']['versions']:
-            if 'require_physical_release' not in config['Scraping']['versions'][version]:
-                config['Scraping']['versions'][version]['require_physical_release'] = False
+        for version in config["Scraping"]["versions"]:
+            if (
+                "require_physical_release"
+                not in config["Scraping"]["versions"][version]
+            ):
+                config["Scraping"]["versions"][version][
+                    "require_physical_release"
+                ] = False
                 modified = True
             # Convert string "true"/"false" to boolean
-            elif isinstance(config['Scraping']['versions'][version]['require_physical_release'], str):
-                str_value = str(config['Scraping']['versions'][version]['require_physical_release']).lower()
+            elif isinstance(
+                config["Scraping"]["versions"][version]["require_physical_release"], str
+            ):
+                str_value = str(
+                    config["Scraping"]["versions"][version]["require_physical_release"]
+                ).lower()
                 # Let Python's bool and json.dump handle the casing
-                config['Scraping']['versions'][version]['require_physical_release'] = str_value in ('true', 'True', 'TRUE')
+                config["Scraping"]["versions"][version]["require_physical_release"] = (
+                    str_value in ("true", "True", "TRUE")
+                )
                 modified = True
-                logging.info(f"Converting string '{str_value}' to boolean for require_physical_release in version {version}")
-        
+                logging.info(
+                    f"Converting string '{str_value}' to boolean for require_physical_release in version {version}"
+                )
+
         if modified:
             save_config(config)
-            logging.info("Added/fixed require_physical_release setting in existing versions")
+            logging.info(
+                "Added/fixed require_physical_release setting in existing versions"
+            )
 
     # Add migration for notification settings (can run later, doesn't affect DB structure)
-    if 'Notifications' in config:
+    if "Notifications" in config:
         notifications_updated = False
         default_notify_on = {
-            'collected': True,
-            'wanted': False,
-            'scraping': False,
-            'adding': False,
-            'checking': False,
-            'sleeping': False,
-            'unreleased': False,
-            'blacklisted': False,
-            'pending_uncached': False,
-            'upgrading': False,
-            'program_stop': True,
-            'program_crash': True,
-            'program_start': True,
-            'program_pause': True,
-            'program_resume': True,
-            'queue_pause': True,
-            'queue_resume': True,
-            'queue_start': True,
-            'queue_stop': True
+            "collected": True,
+            "wanted": False,
+            "scraping": False,
+            "adding": False,
+            "checking": False,
+            "sleeping": False,
+            "unreleased": False,
+            "blacklisted": False,
+            "pending_uncached": False,
+            "upgrading": False,
+            "program_stop": True,
+            "program_crash": True,
+            "program_start": True,
+            "program_pause": True,
+            "program_resume": True,
+            "queue_pause": True,
+            "queue_resume": True,
+            "queue_start": True,
+            "queue_stop": True,
         }
 
-        for notification_id, notification_config in config['Notifications'].items():
+        for notification_id, notification_config in config["Notifications"].items():
             if notification_config is not None:
                 # Check if notify_on is missing or incomplete
-                if 'notify_on' not in notification_config or not isinstance(notification_config['notify_on'], dict):
-                    notification_config['notify_on'] = default_notify_on.copy()
+                if "notify_on" not in notification_config or not isinstance(
+                    notification_config["notify_on"], dict
+                ):
+                    notification_config["notify_on"] = default_notify_on.copy()
                     notifications_updated = True
-                    logging.info(f"Adding default notify_on settings to notification {notification_id}")
+                    logging.info(
+                        f"Adding default notify_on settings to notification {notification_id}"
+                    )
                 else:
                     # Add any missing notification types
                     for key, default_value in default_notify_on.items():
-                        if key not in notification_config['notify_on']:
-                            notification_config['notify_on'][key] = default_value
+                        if key not in notification_config["notify_on"]:
+                            notification_config["notify_on"][key] = default_value
                             notifications_updated = True
-                            logging.info(f"Adding missing notify_on setting '{key}' to notification {notification_id}")
+                            logging.info(
+                                f"Adding missing notify_on setting '{key}' to notification {notification_id}"
+                            )
 
         # Save the updated config if changes were made
         if notifications_updated:
             save_config(config)
-            logging.info("Successfully migrated notifications to include all notify_on settings")
+            logging.info(
+                "Successfully migrated notifications to include all notify_on settings"
+            )
 
     # Add migration for version wake_count setting
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
+        for version_name, version_config in config["Scraping"]["versions"].items():
             # Check if wake_count is missing or is string "None"
-            if 'wake_count' not in version_config or version_config['wake_count'] == "None":
-                version_config['wake_count'] = None  # Set to actual None value
+            if (
+                "wake_count" not in version_config
+                or version_config["wake_count"] == "None"
+            ):
+                version_config["wake_count"] = None  # Set to actual None value
                 versions_updated = True
-                logging.info(f"Adding/fixing wake_count setting to version {version_name}")
+                logging.info(
+                    f"Adding/fixing wake_count setting to version {version_name}"
+                )
             # Also convert string "None" to actual None if it exists
-            elif isinstance(version_config['wake_count'], str) and version_config['wake_count'].lower() == "none":
-                version_config['wake_count'] = None
+            elif (
+                isinstance(version_config["wake_count"], str)
+                and version_config["wake_count"].lower() == "none"
+            ):
+                version_config["wake_count"] = None
                 versions_updated = True
-                logging.info(f"Converting string 'None' to actual None for version {version_name}")
+                logging.info(
+                    f"Converting string 'None' to actual None for version {version_name}"
+                )
 
         # Save the updated config if changes were made
         if versions_updated:
@@ -1630,281 +1956,377 @@ def main():
             logging.info("Successfully migrated version settings to include wake_count")
 
     # Add migration for bitrate filter settings in versions
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
+        for version_name, version_config in config["Scraping"]["versions"].items():
             # Add min_bitrate_mbps if missing
-            if 'min_bitrate_mbps' not in version_config:
-                version_config['min_bitrate_mbps'] = 0.01
+            if "min_bitrate_mbps" not in version_config:
+                version_config["min_bitrate_mbps"] = 0.01
                 versions_updated = True
-                logging.info(f"Adding min_bitrate_mbps setting to version {version_name}")
-            
+                logging.info(
+                    f"Adding min_bitrate_mbps setting to version {version_name}"
+                )
+
             # Add max_bitrate_mbps if missing
-            if 'max_bitrate_mbps' not in version_config:
-                version_config['max_bitrate_mbps'] = float('inf')
+            if "max_bitrate_mbps" not in version_config:
+                version_config["max_bitrate_mbps"] = float("inf")
                 versions_updated = True
-                logging.info(f"Adding max_bitrate_mbps setting to version {version_name}")
-            
+                logging.info(
+                    f"Adding max_bitrate_mbps setting to version {version_name}"
+                )
+
             # Convert string values to float if needed
-            if isinstance(version_config.get('min_bitrate_mbps'), str):
+            if isinstance(version_config.get("min_bitrate_mbps"), str):
                 try:
                     # Handle blank/empty min_bitrate
-                    if not version_config['min_bitrate_mbps'].strip():
-                        version_config['min_bitrate_mbps'] = 0.01
+                    if not version_config["min_bitrate_mbps"].strip():
+                        version_config["min_bitrate_mbps"] = 0.01
                     else:
-                        version_config['min_bitrate_mbps'] = float(version_config['min_bitrate_mbps'])
+                        version_config["min_bitrate_mbps"] = float(
+                            version_config["min_bitrate_mbps"]
+                        )
                     versions_updated = True
-                    logging.info(f"Converting min_bitrate_mbps to float for version {version_name}")
+                    logging.info(
+                        f"Converting min_bitrate_mbps to float for version {version_name}"
+                    )
                 except ValueError:
-                    version_config['min_bitrate_mbps'] = 0.01
+                    version_config["min_bitrate_mbps"] = 0.01
                     versions_updated = True
-                    logging.warning(f"Invalid min_bitrate_mbps value in version {version_name}, resetting to 0.01")
-            
-            if isinstance(version_config.get('max_bitrate_mbps'), str):
+                    logging.warning(
+                        f"Invalid min_bitrate_mbps value in version {version_name}, resetting to 0.01"
+                    )
+
+            if isinstance(version_config.get("max_bitrate_mbps"), str):
                 try:
                     # Handle blank/empty max_bitrate
-                    if not version_config['max_bitrate_mbps'].strip():
-                        version_config['max_bitrate_mbps'] = float('inf')
-                    elif version_config['max_bitrate_mbps'].lower() in ('inf', 'infinity'):
-                        version_config['max_bitrate_mbps'] = float('inf')
+                    if not version_config["max_bitrate_mbps"].strip():
+                        version_config["max_bitrate_mbps"] = float("inf")
+                    elif version_config["max_bitrate_mbps"].lower() in (
+                        "inf",
+                        "infinity",
+                    ):
+                        version_config["max_bitrate_mbps"] = float("inf")
                     else:
-                        version_config['max_bitrate_mbps'] = float(version_config['max_bitrate_mbps'])
+                        version_config["max_bitrate_mbps"] = float(
+                            version_config["max_bitrate_mbps"]
+                        )
                     versions_updated = True
-                    logging.info(f"Converting max_bitrate_mbps to float for version {version_name}")
+                    logging.info(
+                        f"Converting max_bitrate_mbps to float for version {version_name}"
+                    )
                 except ValueError:
-                    version_config['max_bitrate_mbps'] = float('inf')
+                    version_config["max_bitrate_mbps"] = float("inf")
                     versions_updated = True
-                    logging.warning(f"Invalid max_bitrate_mbps value in version {version_name}, resetting to infinity")
+                    logging.warning(
+                        f"Invalid max_bitrate_mbps value in version {version_name}, resetting to infinity"
+                    )
 
         # Save the updated config if changes were made
         if versions_updated:
             save_config(config)
-            logging.info("Successfully migrated version settings to include bitrate filters")
+            logging.info(
+                "Successfully migrated version settings to include bitrate filters"
+            )
 
     # Add migration for language_code in versions
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
-            if 'language_code' not in version_config:
-                version_config['language_code'] = 'en'
+        for version_name, version_config in config["Scraping"]["versions"].items():
+            if "language_code" not in version_config:
+                version_config["language_code"] = "en"
                 versions_updated = True
-                logging.info(f"Adding default language_code 'en' to version {version_name}")
+                logging.info(
+                    f"Adding default language_code 'en' to version {version_name}"
+                )
 
         # Save the updated config if changes were made
         if versions_updated:
             save_config(config)
-            logging.info("Successfully migrated version settings to include language_code")
+            logging.info(
+                "Successfully migrated version settings to include language_code"
+            )
 
     # --- Add migration for fallback_version in versions ---
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
-            if 'fallback_version' not in version_config:
-                version_config['fallback_version'] = 'None'
+        for version_name, version_config in config["Scraping"]["versions"].items():
+            if "fallback_version" not in version_config:
+                version_config["fallback_version"] = "None"
                 versions_updated = True
-                logging.info(f"Adding default fallback_version 'None' to version {version_name}")
+                logging.info(
+                    f"Adding default fallback_version 'None' to version {version_name}"
+                )
 
         # Save the updated config if changes were made
         if versions_updated:
             save_config(config)
-            logging.info("Successfully migrated version settings to include fallback_version")
+            logging.info(
+                "Successfully migrated version settings to include fallback_version"
+            )
     # --- End fallback_version migration ---
 
     # --- Add migration for allow_specials in Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if 'allow_specials' not in source_config:
-                source_config['allow_specials'] = False
+        for source_id, source_config in config["Content Sources"].items():
+            if "allow_specials" not in source_config:
+                source_config["allow_specials"] = False
                 content_sources_updated = True
-                logging.info(f"Adding default allow_specials=False to content source {source_id}")
+                logging.info(
+                    f"Adding default allow_specials=False to content source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include allow_specials setting")
+            logging.info(
+                "Successfully migrated content sources to include allow_specials setting"
+            )
     # --- End allow_specials migration ---
 
     # --- Add migration for custom_symlink_subfolder in Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if 'custom_symlink_subfolder' not in source_config:
-                source_config['custom_symlink_subfolder'] = ''
+        for source_id, source_config in config["Content Sources"].items():
+            if "custom_symlink_subfolder" not in source_config:
+                source_config["custom_symlink_subfolder"] = ""
                 content_sources_updated = True
-                logging.info(f"Adding default custom_symlink_subfolder='' to content source {source_id}")
+                logging.info(
+                    f"Adding default custom_symlink_subfolder='' to content source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include custom_symlink_subfolder setting")
+            logging.info(
+                "Successfully migrated content sources to include custom_symlink_subfolder setting"
+            )
     # --- End custom_symlink_subfolder migration ---
 
     # --- Add migration for cutoff_date in Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if 'cutoff_date' not in source_config:
-                source_config['cutoff_date'] = ''
+        for source_id, source_config in config["Content Sources"].items():
+            if "cutoff_date" not in source_config:
+                source_config["cutoff_date"] = ""
                 content_sources_updated = True
-                logging.info(f"Adding default cutoff_date='' to content source {source_id}")
+                logging.info(
+                    f"Adding default cutoff_date='' to content source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include cutoff_date setting")
+            logging.info(
+                "Successfully migrated content sources to include cutoff_date setting"
+            )
     # --- End cutoff_date migration ---
 
     # --- Add migration for exclude_genres in Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if 'exclude_genres' not in source_config:
-                source_config['exclude_genres'] = []
+        for source_id, source_config in config["Content Sources"].items():
+            if "exclude_genres" not in source_config:
+                source_config["exclude_genres"] = []
                 content_sources_updated = True
-                logging.info(f"Adding default exclude_genres=[] to content source {source_id}")
+                logging.info(
+                    f"Adding default exclude_genres=[] to content source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include exclude_genres setting")
+            logging.info(
+                "Successfully migrated content sources to include exclude_genres setting"
+            )
     # --- End exclude_genres migration ---
 
     # --- Add migration for ignore_tags in Overseerr Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if source_id.startswith('Overseerr') and 'ignore_tags' not in source_config:
-                source_config['ignore_tags'] = ''
+        for source_id, source_config in config["Content Sources"].items():
+            if source_id.startswith("Overseerr") and "ignore_tags" not in source_config:
+                source_config["ignore_tags"] = ""
                 content_sources_updated = True
-                logging.info(f"Adding default ignore_tags='' to Overseerr source {source_id}")
+                logging.info(
+                    f"Adding default ignore_tags='' to Overseerr source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated Overseerr content sources to include ignore_tags setting")
+            logging.info(
+                "Successfully migrated Overseerr content sources to include ignore_tags setting"
+            )
     # --- End ignore_tags migration ---
 
     # --- Add migration for list_length_limit in Content Sources ---
-    if 'Content Sources' in config:
+    if "Content Sources" in config:
         content_sources_updated = False
-        for source_id, source_config in config['Content Sources'].items():
-            if 'list_length_limit' not in source_config:
-                source_config['list_length_limit'] = 0  # Default to no limit
+        for source_id, source_config in config["Content Sources"].items():
+            if "list_length_limit" not in source_config:
+                source_config["list_length_limit"] = 0  # Default to no limit
                 content_sources_updated = True
-                logging.info(f"Adding default list_length_limit=0 to content source {source_id}")
+                logging.info(
+                    f"Adding default list_length_limit=0 to content source {source_id}"
+                )
 
         if content_sources_updated:
             save_config(config)
-            logging.info("Successfully migrated content sources to include list_length_limit setting")
+            logging.info(
+                "Successfully migrated content sources to include list_length_limit setting"
+            )
     # --- End list_length_limit migration ---
 
     # --- MIGRATION: Standardize 'Plex Watchlist' type to 'My Plex Watchlist' with fixed key 'My Plex Watchlist_1' ---
     plex_watchlist_migration_updated = False
-    if 'Content Sources' in config and isinstance(config.get('Content Sources'), dict):
-        content_sources = config['Content Sources']
-        
+    if "Content Sources" in config and isinstance(config.get("Content Sources"), dict):
+        content_sources = config["Content Sources"]
+
         keys_to_delete_for_plex_migration = []
         # Stores the dictionary data that will be used for the "My Plex Watchlist_1" key.
         # The last processed "Plex Watchlist" type source will define this data.
-        data_for_my_plex_watchlist_1_entry = None 
+        data_for_my_plex_watchlist_1_entry = None
 
         # Iterate over a copy of items because we might delete keys from the original dict
         for key, source_config_item in list(content_sources.items()):
-            if isinstance(source_config_item, dict) and source_config_item.get('type') == "Plex Watchlist": # Corrected type to search for
-                plex_watchlist_migration_updated = True # Mark that a change is happening
-                
+            if (
+                isinstance(source_config_item, dict)
+                and source_config_item.get("type") == "Plex Watchlist"
+            ):  # Corrected type to search for
+                plex_watchlist_migration_updated = (
+                    True  # Mark that a change is happening
+                )
+
                 # Prepare the updated data for this source. Work on a copy.
                 updated_source_data_for_plex = source_config_item.copy()
-                updated_source_data_for_plex['type'] = "My Plex Watchlist" # Corrected target type
-                
+                updated_source_data_for_plex["type"] = (
+                    "My Plex Watchlist"  # Corrected target type
+                )
+
                 # Standardize display_name as well for consistency
-                if updated_source_data_for_plex.get('display_name') != "My Plex Watchlist":
-                    updated_source_data_for_plex['display_name'] = "My Plex Watchlist"
-                    logging.info(f"Content source migration: Updating display_name for source (original key: {key}, original type: 'Plex Watchlist') to 'My Plex Watchlist'.")
-                
+                if (
+                    updated_source_data_for_plex.get("display_name")
+                    != "My Plex Watchlist"
+                ):
+                    updated_source_data_for_plex["display_name"] = "My Plex Watchlist"
+                    logging.info(
+                        f"Content source migration: Updating display_name for source (original key: {key}, original type: 'Plex Watchlist') to 'My Plex Watchlist'."
+                    )
+
                 # This item is a candidate to become/update "My Plex Watchlist_1".
                 # The last one processed with type "Plex Watchlist" will "win".
                 data_for_my_plex_watchlist_1_entry = updated_source_data_for_plex
-                
+
                 if key != "My Plex Watchlist_1":
                     keys_to_delete_for_plex_migration.append(key)
                 # If key is "My Plex Watchlist_1", it will be correctly updated by the assignment later if this was the last one.
-                
+
         # Perform deletions of old keys that are being consolidated
         for key_to_del in keys_to_delete_for_plex_migration:
-            if key_to_del in content_sources: # Should always be true
+            if key_to_del in content_sources:  # Should always be true
                 del content_sources[key_to_del]
-                logging.info(f"Content source migration: Removed old entry '{key_to_del}' (original type 'Plex Watchlist') as it's being consolidated into 'My Plex Watchlist_1'.")
+                logging.info(
+                    f"Content source migration: Removed old entry '{key_to_del}' (original type 'Plex Watchlist') as it's being consolidated into 'My Plex Watchlist_1'."
+                )
 
         # Assign the final "My Plex Watchlist_1" data if any "Plex Watchlist" type was found
         if data_for_my_plex_watchlist_1_entry is not None:
             # Check if we are overwriting an existing "My Plex Watchlist_1" or creating it.
             existing_entry_for_target_key = content_sources.get("My Plex Watchlist_1")
-            if existing_entry_for_target_key is not None and existing_entry_for_target_key is not data_for_my_plex_watchlist_1_entry:
-                logging.info(f"Content source migration: Updating/Overwriting entry 'My Plex Watchlist_1' with data from a consolidated source (original type 'Plex Watchlist').")
-            elif existing_entry_for_target_key is None: # Check if it's a new creation
-                 logging.info(f"Content source migration: Creating new entry 'My Plex Watchlist_1' from a source with original type 'Plex Watchlist'.")
+            if (
+                existing_entry_for_target_key is not None
+                and existing_entry_for_target_key
+                is not data_for_my_plex_watchlist_1_entry
+            ):
+                logging.info(
+                    f"Content source migration: Updating/Overwriting entry 'My Plex Watchlist_1' with data from a consolidated source (original type 'Plex Watchlist')."
+                )
+            elif existing_entry_for_target_key is None:  # Check if it's a new creation
+                logging.info(
+                    f"Content source migration: Creating new entry 'My Plex Watchlist_1' from a source with original type 'Plex Watchlist'."
+                )
             # If existing_entry_for_target_key is data_for_my_plex_watchlist_1_entry, it means the item was already "My Plex Watchlist_1" and just got its internals updated.
 
             content_sources["My Plex Watchlist_1"] = data_for_my_plex_watchlist_1_entry
             # plex_watchlist_migration_updated is already true if data_for_my_plex_watchlist_1_entry is not None
-        
+
     if plex_watchlist_migration_updated:
         save_config(config)
-        logging.info("Successfully migrated 'Plex Watchlist' content sources to the standardized 'My Plex Watchlist' type and key ('My Plex Watchlist_1').")
+        logging.info(
+            "Successfully migrated 'Plex Watchlist' content sources to the standardized 'My Plex Watchlist' type and key ('My Plex Watchlist_1')."
+        )
     # --- End 'Plex Watchlist' key and type migration ---
 
     # --- Add migration for year_match_weight in versions ---
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
-            if 'year_match_weight' not in version_config:
-                version_config['year_match_weight'] = 3 # Default to int
+        for version_name, version_config in config["Scraping"]["versions"].items():
+            if "year_match_weight" not in version_config:
+                version_config["year_match_weight"] = 3  # Default to int
                 versions_updated = True
-                logging.info(f"Adding default year_match_weight 3 to version {version_name}")
+                logging.info(
+                    f"Adding default year_match_weight 3 to version {version_name}"
+                )
             # Convert to int if it's not already an int
-            elif not isinstance(version_config['year_match_weight'], int):
+            elif not isinstance(version_config["year_match_weight"], int):
                 try:
                     # Round float before converting to int
-                    if isinstance(version_config['year_match_weight'], float):
-                        version_config['year_match_weight'] = int(round(version_config['year_match_weight']))
-                    else: # Handle strings or other types
-                        version_config['year_match_weight'] = int(round(float(version_config['year_match_weight'])))
+                    if isinstance(version_config["year_match_weight"], float):
+                        version_config["year_match_weight"] = int(
+                            round(version_config["year_match_weight"])
+                        )
+                    else:  # Handle strings or other types
+                        version_config["year_match_weight"] = int(
+                            round(float(version_config["year_match_weight"]))
+                        )
                     versions_updated = True
-                    logging.info(f"Converting year_match_weight to int for version {version_name}")
+                    logging.info(
+                        f"Converting year_match_weight to int for version {version_name}"
+                    )
                 except (ValueError, TypeError):
-                    version_config['year_match_weight'] = 3 # Reset to default int if conversion fails
+                    version_config["year_match_weight"] = (
+                        3  # Reset to default int if conversion fails
+                    )
                     versions_updated = True
-                    logging.warning(f"Invalid year_match_weight value in version {version_name}, resetting to 3")
+                    logging.warning(
+                        f"Invalid year_match_weight value in version {version_name}, resetting to 3"
+                    )
 
         if versions_updated:
             save_config(config)
-            logging.info("Successfully migrated version settings to include year_match_weight")
+            logging.info(
+                "Successfully migrated version settings to include year_match_weight"
+            )
     # --- End year_match_weight migration ---
 
     # --- Add migration for anime_filter_mode in versions ---
-    if 'Scraping' in config and 'versions' in config['Scraping']:
+    if "Scraping" in config and "versions" in config["Scraping"]:
         versions_updated = False
-        for version_name, version_config in config['Scraping']['versions'].items():
-            if 'anime_filter_mode' not in version_config:
-                version_config['anime_filter_mode'] = 'None'
+        for version_name, version_config in config["Scraping"]["versions"].items():
+            if "anime_filter_mode" not in version_config:
+                version_config["anime_filter_mode"] = "None"
                 versions_updated = True
-                logging.info(f"Adding default anime_filter_mode 'None' to version {version_name}")
+                logging.info(
+                    f"Adding default anime_filter_mode 'None' to version {version_name}"
+                )
 
         if versions_updated:
             save_config(config)
-            logging.info("Successfully migrated version settings to include anime_filter_mode")
+            logging.info(
+                "Successfully migrated version settings to include anime_filter_mode"
+            )
     # --- End anime_filter_mode migration ---
 
     # Check and set upgrading_percentage_threshold if blank
-    threshold_value = get_setting('Scraping', 'upgrading_percentage_threshold', '0.1')
+    threshold_value = get_setting("Scraping", "upgrading_percentage_threshold", "0.1")
     if not str(threshold_value).strip():
-        set_setting('Scraping', 'upgrading_percentage_threshold', '0.1')
+        set_setting("Scraping", "upgrading_percentage_threshold", "0.1")
         logging.info("Set blank upgrading_percentage_threshold to default value of 0.1")
 
     import os
+
     # Get battery port from environment variable
-    battery_port = int(os.environ.get('CLI_DEBRID_BATTERY_PORT', '5001'))
-    battery_host = os.environ.get('CLI_DEBRID_BATTERY_HOST', 'localhost')
-    
+    battery_port = int(os.environ.get("CLI_DEBRID_BATTERY_PORT", "5001"))
+    battery_host = os.environ.get("CLI_DEBRID_BATTERY_HOST", "localhost")
+
     # Set metadata battery URL with the correct port
-    set_setting('Metadata Battery', 'url', f'http://{battery_host}:{battery_port}')
+    set_setting("Metadata Battery", "url", f"http://{battery_host}:{battery_port}")
     logging.info(f"Set metadata battery URL to http://{battery_host}:{battery_port}")
 
     ensure_settings_file()
@@ -1918,7 +2340,7 @@ def main():
     # ...
 
     # Add delay to ensure server is ready # Maybe less critical now
-    time.sleep(1) # Reduced delay slightly
+    time.sleep(1)  # Reduced delay slightly
 
     # Fix notification settings if needed (can run later)
     fix_notification_settings()
@@ -1926,20 +2348,22 @@ def main():
     # Validate Plex tokens on startup
     token_status = validate_plex_tokens()
     for username, status in token_status.items():
-        if not status['valid']:
+        if not status["valid"]:
             logging.error(f"Invalid Plex token for user {username}")
 
     # Add the update_media_locations call here
     # update_media_locations() # Keep commented unless needed at startup
 
-    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system("cls" if os.name == "nt" else "clear")
 
     version = get_version()
 
     # Display logo and web UI message
     import socket
+
     ip_address = socket.gethostbyname(socket.gethostname())
-    print(r"""
+    print(
+        r"""
       (            (             )           (     
       )\ (         )\ )   (   ( /(  (   (    )\ )  
   (  ((_))\       (()/(  ))\  )\()) )(  )\  (()/(  
@@ -1950,26 +2374,28 @@ def main():
            |_____|                                 
 
            Version:                      
-    """)
-    print(f"             {version}\n") 
+    """
+    )
+    print(f"             {version}\n")
     print(f"cli_debrid is initialized.")
-    port = int(os.environ.get('CLI_DEBRID_PORT', 5000))
+    port = int(os.environ.get("CLI_DEBRID_PORT", 5000))
     print(f"The web UI is available at http://localhost:{port}")
     print("Use the web UI to control the program.")
     print("Press Ctrl+C to stop the program.")
 
     # Start the system tray icon if running as a packaged Windows app
-    if is_frozen() and platform.system() == 'Windows':
+    if is_frozen() and platform.system() == "Windows":
         # Import Windows-specific modules only on Windows
         import win32gui
         import win32con
+
         # Start the system tray icon
         tray_thread = threading.Thread(target=setup_tray_icon)
         tray_thread.daemon = True
         tray_thread.start()
 
     # Run the metadata battery only on Windows
-    is_windows = platform.system() == 'Windows'
+    is_windows = platform.system() == "Windows"
     if is_windows:
         # Start the metadata battery
         print("Running on Windows. Starting metadata battery...")
@@ -1979,39 +2405,68 @@ def main():
     # Always print this message
     print("Running in console mode.")
 
-    if get_setting('Debug', 'auto_run_program'):
+    if get_setting("Debug", "auto_run_program"):
         # Add delay to ensure server is ready for app_context usage
-        time.sleep(3)  # Increased delay slightly to ensure Flask app is fully up for app_context
-        
+        time.sleep(
+            3
+        )  # Increased delay slightly to ensure Flask app is fully up for app_context
+
         # --- START EDIT: Directly call _execute_start_program ---
         # The readiness check via HTTP is less critical if we call the Python function directly,
         # but ensuring flask_app.program_runner is ready is vital.
         # The __main__ block should have set up flask_app.program_runner and its listeners.
 
-        logging.info("Auto-start: Attempting to start program by directly calling _execute_start_program...")
+        logging.info(
+            "Auto-start: Attempting to start program by directly calling _execute_start_program..."
+        )
         try:
             # Run the internal start function within the Flask app context
             with flask_app.app_context():
                 # Ensure current_app.program_runner (via flask_app.program_runner) is available
-                if not getattr(flask_app, 'program_runner', None):
-                    logging.error("CRITICAL [main.py auto-start]: flask_app.program_runner not set before calling _execute_start_program. Aborting.")
-                    print("Failed to auto-start program: Internal setup error (runner not found on app).")
-                elif not getattr(flask_app.program_runner, 'initial_listeners_setup_complete', False):
-                    logging.error("CRITICAL [main.py auto-start]: flask_app.program_runner listeners not confirmed setup. Aborting direct start.")
-                    print("Failed to auto-start program: Internal setup error (runner listeners not ready).")
+                if not getattr(flask_app, "program_runner", None):
+                    logging.error(
+                        "CRITICAL [main.py auto-start]: flask_app.program_runner not set before calling _execute_start_program. Aborting."
+                    )
+                    print(
+                        "Failed to auto-start program: Internal setup error (runner not found on app)."
+                    )
+                elif not getattr(
+                    flask_app.program_runner, "initial_listeners_setup_complete", False
+                ):
+                    logging.error(
+                        "CRITICAL [main.py auto-start]: flask_app.program_runner listeners not confirmed setup. Aborting direct start."
+                    )
+                    print(
+                        "Failed to auto-start program: Internal setup error (runner listeners not ready)."
+                    )
                 else:
-                    start_result = _execute_start_program(skip_connectivity_check=True) # Direct call, skip initial connectivity check for auto-start
+                    start_result = _execute_start_program(
+                        skip_connectivity_check=True
+                    )  # Direct call, skip initial connectivity check for auto-start
 
                     if start_result.get("status") == "success":
-                        print("Program started successfully via auto-start (direct call).")
-                        logging.info("Program started successfully via auto-start (direct call).")
+                        print(
+                            "Program started successfully via auto-start (direct call)."
+                        )
+                        logging.info(
+                            "Program started successfully via auto-start (direct call)."
+                        )
                     else:
-                        message = start_result.get("message", "Unknown error from _execute_start_program.")
+                        message = start_result.get(
+                            "message", "Unknown error from _execute_start_program."
+                        )
                         print(f"Failed to auto-start program (direct call): {message}")
-                        logging.error(f"Failed to auto-start program (direct call): {message}. Details: {start_result.get('failed_services_details')}")
+                        logging.error(
+                            f"Failed to auto-start program (direct call): {message}. Details: {start_result.get('failed_services_details')}"
+                        )
         except Exception as e_direct_call:
-            print(f"Critical error during direct call to _execute_start_program for auto-start: {e_direct_call}")
-            logging.error(f"Critical error during direct call to _execute_start_program for auto-start: {e_direct_call}", exc_info=True)
+            print(
+                f"Critical error during direct call to _execute_start_program for auto-start: {e_direct_call}"
+            )
+            logging.error(
+                f"Critical error during direct call to _execute_start_program for auto-start: {e_direct_call}",
+                exc_info=True,
+            )
         # --- END EDIT ---
 
     # Set up signal handling
@@ -2020,30 +2475,33 @@ def main():
 
     # --- START EDIT: Supervisor attributes ---
     # Using function attributes for state to keep them local to main() context
-    if not hasattr(main, 'last_supervisor_check_time'):
+    if not hasattr(main, "last_supervisor_check_time"):
         main.last_supervisor_check_time = 0
-    if not hasattr(main, 'supervisor_resume_attempts'):
+    if not hasattr(main, "supervisor_resume_attempts"):
         main.supervisor_resume_attempts = 0
-    SUPERVISOR_CHECK_INTERVAL = 300 # 5 minutes
-    SUPERVISOR_MAX_RESUME_ATTEMPTS = 3 
+    SUPERVISOR_CHECK_INTERVAL = 300  # 5 minutes
+    SUPERVISOR_MAX_RESUME_ATTEMPTS = 3
     # --- END EDIT ---
 
     # Prepare MemProbe timing
-    if not hasattr(main, 'last_memprobe_time'):
+    if not hasattr(main, "last_memprobe_time"):
         main.last_memprobe_time = 0.0
 
     # Main loop
     try:
         while True:
-            time.sleep(5) # Main loop poll interval
+            time.sleep(5)  # Main loop poll interval
 
             # ─── MEM-PROBE #2: per-process allocations ─────────────
             try:
                 now = time.time()
                 # Only run the periodic memory probe if tracemalloc tracking is enabled via settings
-                if now - main.last_memprobe_time > 60 and get_setting('Debug', 'enable_tracemalloc', False):
+                if now - main.last_memprobe_time > 60 and get_setting(
+                    "Debug", "enable_tracemalloc", False
+                ):
                     main.last_memprobe_time = now
                     import tracemalloc, psutil, os, gc
+
                     if not tracemalloc.is_tracing():
                         tracemalloc.start()
                     current, peak = tracemalloc.get_traced_memory()
@@ -2052,12 +2510,13 @@ def main():
                     logging.info(
                         f"[MemProbe-Main] rss={rss_bytes/1048576:,.0f} MB "
                         f"tracemalloc={current/1048576:,.0f}/{peak/1048576:,.0f} MB "
-                        f"py_objects={obj_count}")
+                        f"py_objects={obj_count}"
+                    )
 
                     # Log top 5 files by new allocations since start
                     try:
                         snapshot = tracemalloc.take_snapshot()
-                        top_stats = snapshot.statistics('filename')[:5]
+                        top_stats = snapshot.statistics("filename")[:5]
                         for stat in top_stats:
                             logging.info(f"[MemProbe-Main]    {stat}")
                     except Exception:
@@ -2068,100 +2527,167 @@ def main():
 
             # --- START EDIT: Supervisor Logic ---
             # No 'global' keyword needed here to access the module-level variable
-            if global_program_runner_instance and global_program_runner_instance.is_running() and False:
-                if global_program_runner_instance.queue_paused and global_program_runner_instance.pause_info.get("error_type"):
+            if (
+                global_program_runner_instance
+                and global_program_runner_instance.is_running()
+                and False
+            ):
+                if (
+                    global_program_runner_instance.queue_paused
+                    and global_program_runner_instance.pause_info.get("error_type")
+                ):
                     current_time = time.time()
-                    if current_time - main.last_supervisor_check_time > SUPERVISOR_CHECK_INTERVAL:
+                    if (
+                        current_time - main.last_supervisor_check_time
+                        > SUPERVISOR_CHECK_INTERVAL
+                    ):
                         main.last_supervisor_check_time = current_time
-                        logging.info("[Supervisor] ProgramRunner is paused. Verifying pause conditions.")
-                        
-                        pause_error_type = global_program_runner_instance.pause_info.get("error_type")
-                        pause_reason_str = global_program_runner_instance.pause_info.get("reason_string", "Unknown reason")
+                        logging.info(
+                            "[Supervisor] ProgramRunner is paused. Verifying pause conditions."
+                        )
+
+                        pause_error_type = (
+                            global_program_runner_instance.pause_info.get("error_type")
+                        )
+                        pause_reason_str = (
+                            global_program_runner_instance.pause_info.get(
+                                "reason_string", "Unknown reason"
+                            )
+                        )
                         should_attempt_resume = False
 
                         if pause_error_type == "CONNECTION_ERROR":
-                            logging.info(f"[Supervisor] Pause due to {pause_error_type}. Re-checking service connectivity...")
-                            from routes.program_operation_routes import check_service_connectivity # Import locally
-                            connectivity_ok, failed_services = check_service_connectivity()
+                            logging.info(
+                                f"[Supervisor] Pause due to {pause_error_type}. Re-checking service connectivity..."
+                            )
+                            from routes.program_operation_routes import (
+                                check_service_connectivity,
+                            )  # Import locally
+
+                            connectivity_ok, failed_services = (
+                                check_service_connectivity()
+                            )
                             if connectivity_ok:
                                 logging.info("[Supervisor] Connectivity restored.")
                                 should_attempt_resume = True
                             else:
-                                logging.info(f"[Supervisor] Connectivity issues persist: {failed_services}")
-                        
+                                logging.info(
+                                    f"[Supervisor] Connectivity issues persist: {failed_services}"
+                                )
+
                         elif pause_error_type == "DB_HEALTH":
-                            logging.info(f"[Supervisor] Pause due to {pause_error_type}. Re-checking database health...")
-                            if verify_database_health(): # verify_database_health is in main.py
+                            logging.info(
+                                f"[Supervisor] Pause due to {pause_error_type}. Re-checking database health..."
+                            )
+                            if (
+                                verify_database_health()
+                            ):  # verify_database_health is in main.py
                                 logging.info("[Supervisor] Database health is OK.")
                                 should_attempt_resume = True
                             else:
-                                logging.info("[Supervisor] Database health issues persist.")
+                                logging.info(
+                                    "[Supervisor] Database health issues persist."
+                                )
 
                         elif pause_error_type == "SYSTEM_SCHEDULED":
-                            logging.info(f"[Supervisor] Pause due to {pause_error_type}. Re-checking system pause schedule...")
-                            if not global_program_runner_instance._is_within_pause_schedule():
-                                logging.info("[Supervisor] System pause schedule has ended.")
+                            logging.info(
+                                f"[Supervisor] Pause due to {pause_error_type}. Re-checking system pause schedule..."
+                            )
+                            if (
+                                not global_program_runner_instance._is_within_pause_schedule()
+                            ):
+                                logging.info(
+                                    "[Supervisor] System pause schedule has ended."
+                                )
                                 should_attempt_resume = True
                             else:
-                                logging.info("[Supervisor] Still within system pause schedule.")
-                        
+                                logging.info(
+                                    "[Supervisor] Still within system pause schedule."
+                                )
+
                         # Add other specific checks if ProgramRunner introduces new pause_info error_types
 
                         if should_attempt_resume:
                             main.supervisor_resume_attempts += 1
-                            logging.info(f"[Supervisor] Conditions for pause '{pause_reason_str}' (Type: {pause_error_type}) no longer met. Attempting to resume ProgramRunner (Attempt {main.supervisor_resume_attempts}/{SUPERVISOR_MAX_RESUME_ATTEMPTS}).")
+                            logging.info(
+                                f"[Supervisor] Conditions for pause '{pause_reason_str}' (Type: {pause_error_type}) no longer met. Attempting to resume ProgramRunner (Attempt {main.supervisor_resume_attempts}/{SUPERVISOR_MAX_RESUME_ATTEMPTS})."
+                            )
                             try:
                                 global_program_runner_instance.resume_queue()
                                 # resume_queue() clears pause_info if successful
                                 if not global_program_runner_instance.queue_paused:
-                                    logging.info("[Supervisor] ProgramRunner resumed successfully by supervisor.")
-                                    main.supervisor_resume_attempts = 0 # Reset attempts on success
+                                    logging.info(
+                                        "[Supervisor] ProgramRunner resumed successfully by supervisor."
+                                    )
+                                    main.supervisor_resume_attempts = (
+                                        0  # Reset attempts on success
+                                    )
                                 else:
-                                    logging.warning(f"[Supervisor] Called resume_queue(), but ProgramRunner is still paused. Current pause reason: {global_program_runner_instance.pause_info.get('reason_string')}")
-                                    if main.supervisor_resume_attempts >= SUPERVISOR_MAX_RESUME_ATTEMPTS:
-                                        logging.error(f"[Supervisor] Max resume attempts ({SUPERVISOR_MAX_RESUME_ATTEMPTS}) reached. ProgramRunner remains paused. Manual intervention may be required. Last pause reason: {pause_reason_str}")
+                                    logging.warning(
+                                        f"[Supervisor] Called resume_queue(), but ProgramRunner is still paused. Current pause reason: {global_program_runner_instance.pause_info.get('reason_string')}"
+                                    )
+                                    if (
+                                        main.supervisor_resume_attempts
+                                        >= SUPERVISOR_MAX_RESUME_ATTEMPTS
+                                    ):
+                                        logging.error(
+                                            f"[Supervisor] Max resume attempts ({SUPERVISOR_MAX_RESUME_ATTEMPTS}) reached. ProgramRunner remains paused. Manual intervention may be required. Last pause reason: {pause_reason_str}"
+                                        )
                                         # Optionally, send a critical notification here
                             except Exception as e_resume:
-                                logging.error(f"[Supervisor] Error attempting to resume ProgramRunner: {e_resume}", exc_info=True)
+                                logging.error(
+                                    f"[Supervisor] Error attempting to resume ProgramRunner: {e_resume}",
+                                    exc_info=True,
+                                )
                         else:
                             # Conditions for pause still met, reset resume attempts for this specific pause reason if it changes.
                             # This might be too complex; for now, attempts are general.
-                            logging.info(f"[Supervisor] Conditions for pause '{pause_reason_str}' (Type: {pause_error_type}) still appear to be met.")
+                            logging.info(
+                                f"[Supervisor] Conditions for pause '{pause_reason_str}' (Type: {pause_error_type}) still appear to be met."
+                            )
                             # If pause reason changes, supervisor_resume_attempts should ideally reset.
                             # For simplicity, we're not tracking changes in pause_info string here.
                 elif not global_program_runner_instance.queue_paused:
                     # If queue is not paused, reset supervisor attempts.
                     if main.supervisor_resume_attempts > 0:
-                        logging.info("[Supervisor] ProgramRunner is no longer paused. Resetting resume attempts.")
+                        logging.info(
+                            "[Supervisor] ProgramRunner is no longer paused. Resetting resume attempts."
+                        )
                         main.supervisor_resume_attempts = 0
-                    main.last_supervisor_check_time = time.time() # Update check time even if not paused to delay next check
+                    main.last_supervisor_check_time = (
+                        time.time()
+                    )  # Update check time even if not paused to delay next check
 
             # --- END EDIT: Supervisor Logic ---
 
     except KeyboardInterrupt:
         from routes.program_operation_routes import cleanup_port
+
         cleanup_port()
         stop_program()
         stop_global_profiling()
         print("Program stopped.")
 
+
 def package_main():
     setup_logging()
     package_app()
 
+
 def print_version():
     try:
-        with open('version.txt', 'r') as f:
+        with open("version.txt", "r") as f:
             version = f.read().strip()
             print(f"Version:\n\n\t     {version}\n")
     except Exception as e:
         logging.error(f"Failed to read version: {e}")
         print("Version: Unknown\n")
 
+
 if __name__ == "__main__":
     # Start tracemalloc only if explicitly enabled in settings to avoid the default overhead
     print("TESTSETSETSETSETSE")
-    if get_setting('Debug', 'enable_tracemalloc', False):
+    if get_setting("Debug", "enable_tracemalloc", False):
         tracemalloc.start()
     try:
         if len(sys.argv) > 1 and sys.argv[1] == "--package":
@@ -2169,8 +2695,9 @@ if __name__ == "__main__":
         else:
             setup_logging()
             start_global_profiling()
-            
+
             from routes.api_tracker import setup_api_logging
+
             setup_api_logging()
             from routes.web_server import start_server
             from routes.extensions import app as flask_app
@@ -2179,39 +2706,47 @@ if __name__ == "__main__":
             print_version()
 
             program_runner_instance = ProgramRunner()
-            program_runner_instance.initial_listeners_setup_complete = False 
-            flask_app.program_runner = program_runner_instance # flask_app is now defined
+            program_runner_instance.initial_listeners_setup_complete = False
+            flask_app.program_runner = (
+                program_runner_instance  # flask_app is now defined
+            )
             global_program_runner_instance = program_runner_instance
-            
+
             try:
                 _setup_scheduler_listeners(global_program_runner_instance)
                 global_program_runner_instance.initial_listeners_setup_complete = True
-                logging.info("Initial scheduler listeners set up successfully in __main__ for flask_app.program_runner.")
+                logging.info(
+                    "Initial scheduler listeners set up successfully in __main__ for flask_app.program_runner."
+                )
             except Exception as e_listeners:
-                logging.error(f"Failed to set up initial scheduler listeners in __main__: {e_listeners}", exc_info=True)
-            
+                logging.error(
+                    f"Failed to set up initial scheduler listeners in __main__: {e_listeners}",
+                    exc_info=True,
+                )
+
             print("\ncli_debrid Python environment initialized.")
 
             def run_flask():
-                if not start_server(): 
+                if not start_server():
                     return False
                 return True
 
             if not run_flask():
                 logging.critical("Flask server failed to start. Exiting.")
                 sys.exit(1)
-                
-            port = int(os.environ.get('CLI_DEBRID_PORT', 5000))
+
+            port = int(os.environ.get("CLI_DEBRID_PORT", 5000))
             print(f"The web UI is available at http://localhost:{port}")
-            main() 
+            main()
     except KeyboardInterrupt:
         print("KeyboardInterrupt received. Generating memory usage report...")
-        
+
         try:
             import tracemalloc
+
             if tracemalloc.is_tracing():
                 snapshot = tracemalloc.take_snapshot()
-                top_stats = snapshot.statistics('lineno')
+                top_stats = snapshot.statistics("lineno")
 
                 print("\n[ Top 10 memory consuming locations ]")
                 for stat in top_stats[:10]:
@@ -2224,5 +2759,8 @@ if __name__ == "__main__":
         stop_global_profiling()
         print("Program stopped by KeyboardInterrupt in __main__.")
     except Exception as e_main_startup:
-        logging.critical(f"Unhandled exception during __main__ startup: {e_main_startup}", exc_info=True)
+        logging.critical(
+            f"Unhandled exception during __main__ startup: {e_main_startup}",
+            exc_info=True,
+        )
         print(f"Critical startup error: {e_main_startup}")
