@@ -9,7 +9,6 @@ setup_plex_api_patches()
 
 from plexapi.myplex import MyPlexAccount
 from utilities.settings import get_setting
-from queues.config_manager import load_config
 from .plex_token_manager import update_token_status
 
 from utilities.watchlist import (
@@ -185,6 +184,9 @@ def _validate_single_token(token: str, username: str | None = None) -> Dict[str,
 
 def validate_plex_tokens() -> Dict[str, Dict[str, Any]]:
     """Validate all configured Plex tokens and return their status."""
+    # Import here to avoid circular import
+    from queues.config_manager import load_config
+
     token_status = {}
 
     # Validate main user's token
