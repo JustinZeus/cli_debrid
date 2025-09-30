@@ -119,6 +119,7 @@ from utilities.watchlist import (
     run_async_fetches,
     tmdb_to_imdb,
     WatchlistFetchCoordinator,
+    WatchlistItemProcessor,
 )
 
 # Get db_content directory from environment variable with fallback
@@ -152,19 +153,29 @@ def save_plex_cache(cache, cache_file):
         logging.error(f"Error saving Plex watchlist cache: {e}")
 
 
-def get_plex_client():
+def get_plex_client() -> tuple[Any, str] | tuple[None, None]:
+    """
+    Get Plex client connection and token.
+
+    Returns:
+        Tuple of (account, token_string) or (None, None) on failure
+    """
     start_time = time.time()
-    # Prefer main Plex token, fallback to symlink token if primary not set
+
+    # Get tokens with explicit type casting
     plex_token = get_setting("Plex", "token")
-    if not plex_token:
+    if not plex_token or not isinstance(plex_token, str):
         plex_token = get_setting("File Management", "plex_token_for_symlink")
 
-    if not plex_token:
+    # Type guard - ensure we have a string token or None
+    if not plex_token or not isinstance(plex_token, str):
         logging.error(
-            "Plex token not configured. Please add Plex token in settings (Plex:token or File Management:plex_token_for_symlink)."
+            "Plex token not configured. Please add Plex token in settings "
+            "(Plex:token or File Management:plex_token_for_symlink)."
         )
-        return None, None  # Return None for account and token string
+        return None, None
 
+    # At this point, type checker knows plex_token is str
     try:
         logging.info("Connecting to Plex.tv cloud service using token authentication")
         account = MyPlexAccount(token=plex_token)
@@ -178,11 +189,12 @@ def get_plex_client():
         logging.info(
             f"Plex client connection took {time.time() - start_time:.4f} seconds"
         )
-        return account, plex_token  # Return account object and token string
+        return account, plex_token
     except Exception as e:
         logging.error(f"Error connecting to Plex.tv cloud service: {e}")
         logging.error(
-            f"Plex client connection attempt took {time.time() - start_time:.4f} seconds before failing"
+            f"Plex client connection attempt took {time.time() - start_time:.4f} "
+            "seconds before failing"
         )
         return None, None
 
@@ -220,179 +232,82 @@ def get_show_status(imdb_id: str) -> str:
 def get_wanted_from_plex_watchlist(
     versions: Dict[str, bool],
 ) -> List[Tuple[List[Dict[str, Any]], Dict[str, bool]]]:
+    """
+    Retrieve and process the main Plex user's watchlist.
+
+    Args:
+        versions: Dictionary of version configurations
+
+    Returns:
+        List of tuples containing (wanted_items, versions)
+    """
     overall_start_time = time.time()
-    all_wanted_items = []
-    processed_items_for_current_run = []
 
     logging.info("Starting Plex.tv cloud watchlist retrieval")
 
-    client_start_time = time.time()
+    # Connect to Plex
     account, plex_token_str = get_plex_client()
-    client_end_time = time.time()
-    logging.info(
-        f"get_plex_client() call took {client_end_time - client_start_time:.4f} seconds"
-    )
-
     if not account or not plex_token_str:
-        logging.error(
-            "Failed to get Plex client or token - no account available or token missing"
-        )
+        logging.error("Failed to get Plex client or token")
         return [([], versions)]
 
     logging.info(f"Using Plex account: {account.username}")
 
     try:
-        should_remove = get_setting("Debug", "plex_watchlist_removal", False)
-        keep_series = get_setting("Debug", "plex_watchlist_keep_series", False)
-
+        # Fetch watchlist
         logging.info("Fetching initial watchlist from Plex.tv cloud service")
-        fetch_watchlist_start_time = time.time()
+        fetch_start = time.time()
         initial_watchlist = account.watchlist()
-        fetch_watchlist_end_time = time.time()
         logging.info(
-            f"Fetching initial watchlist from Plex API took {fetch_watchlist_end_time - fetch_watchlist_start_time:.4f} seconds. Found {len(initial_watchlist)} items."
+            f"Fetching watchlist took {time.time() - fetch_start:.4f} seconds. "
+            f"Found {len(initial_watchlist)} items"
         )
 
         if not initial_watchlist:
-            logging.info("Plex watchlist is empty.")
+            logging.info("Plex watchlist is empty")
             return [([], versions)]
 
-        # Initialize the detail cache
+        # Fetch item details with caching
         detail_cache = PlexDetailCache(DETAIL_CACHE_FILE, max_age_days=30)
         coordinator = WatchlistFetchCoordinator(detail_cache)
-
-        # Fetch all item details using cache when possible
         all_fetched_items, fetch_stats = coordinator.fetch_all_item_details(
-            initial_watchlist, plex_token_str  # or just 'token' in the other function
+            initial_watchlist, plex_token_str
         )
 
         logging.info(
             f"Fetched details for {fetch_stats['total_items']} items "
-            f"({fetch_stats['cache_hits']} from cache, {fetch_stats['fetched_count']} fetched)"
+            f"({fetch_stats['cache_hits']} from cache, "
+            f"{fetch_stats['fetched_count']} fetched)"
         )
 
-        total_items_from_async = len(all_fetched_items)
-        skipped_count = 0
-        removed_count = 0
-        collected_skipped = 0
+        # Process items into wanted list
+        processor = WatchlistItemProcessor(account, account.username)
+        wanted_items, process_stats = processor.process_items(all_fetched_items)
 
-        processing_loop_start_time = time.time()
-        for item_details in all_fetched_items:
-            original_plex_item = item_details["original_plex_item"]
-            title = original_plex_item.title
-
-            if item_details.get("error"):
-                logging.warning(
-                    f"Skipping item '{title}' due to error during async fetch: {item_details['error']}"
-                )
-                skipped_count += 1
-                continue
-
-            imdb_id = item_details["imdb_id"]
-            tmdb_id = item_details["tmdb_id"]
-            media_type = (
-                item_details["media_type"]
-                if item_details["media_type"]
-                else original_plex_item.type
-            )
-
-            if not imdb_id and tmdb_id and media_type:
-                converted_imdb_id, _ = tmdb_to_imdb(tmdb_id, media_type, title)
-                if converted_imdb_id:
-                    imdb_id = converted_imdb_id
-
-            if not imdb_id:
-                skipped_count += 1
-                logging.debug(
-                    f"Skipping item '{title}' - no IMDB ID found after async fetch and potential conversion."
-                )
-                continue
-
-            if media_type == "show":
-                media_type = "tv"
-
-            item_state = get_media_item_presence(imdb_id=imdb_id)
-            logging.debug(f"Item '{title}' (IMDB: {imdb_id}) - Presence: {item_state}")
-
-            if item_state == "Collected" and should_remove:
-                if media_type == "tv":
-                    if keep_series:
-                        logging.debug(
-                            f"Keeping collected TV series: '{title}' (IMDB: {imdb_id}) - keep_series is enabled."
-                        )
-                        collected_skipped += 1
-                        continue
-                    else:
-                        show_status = get_show_status(imdb_id)
-                        if show_status != "ended":
-                            logging.debug(
-                                f"Keeping collected ongoing TV series: '{title}' (IMDB: {imdb_id}) - status: {show_status}."
-                            )
-                            collected_skipped += 1
-                            continue
-                        logging.debug(
-                            f"Identified collected and ended TV series for removal: '{title}' (IMDB: {imdb_id}) - status: {show_status}."
-                        )
-                else:
-                    logging.debug(
-                        f"Identified collected movie for removal: '{title}' (IMDB: {imdb_id})."
-                    )
-
-                try:
-                    remove_item_start_time = time.time()
-                    account.removeFromWatchlist([original_plex_item])
-                    removed_count += 1
-                    logging.info(
-                        f"Successfully removed '{title}' (IMDB: {imdb_id}) from watchlist. Took {time.time() - remove_item_start_time:.4f}s."
-                    )
-                    continue
-                except Exception as e_remove:
-                    logging.error(
-                        f"Failed to remove '{title}' (IMDB: {imdb_id}) from watchlist: {e_remove}"
-                    )
-
-            processed_items_for_current_run.append(
-                {
-                    "imdb_id": imdb_id,
-                    "media_type": media_type,
-                    "content_source_detail": account.username,
-                }
-            )
-            logging.debug(
-                f"Added '{title}' (IMDB: {imdb_id}, Type: {media_type}) to processed items from source: {account.username}"
-            )
-
-        processing_loop_end_time = time.time()
+        # Log summary
+        logging.info("Plex.tv cloud watchlist processing complete:")
+        logging.info(f"  Total items in watchlist: {len(initial_watchlist)}")
+        logging.info(f"  Items successfully processed: {process_stats['processed']}")
         logging.info(
-            f"Main processing loop for {total_items_from_async} fetched items took {processing_loop_end_time - processing_loop_start_time:.4f} seconds."
+            f"  Items skipped (no IMDB ID or error): {process_stats['skipped']}"
+        )
+        logging.info(f"  Items removed from watchlist: {process_stats['removed']}")
+        logging.info(
+            f"  Items kept (collected but ongoing): {process_stats['collected_kept']}"
         )
 
-        logging.info(f"Plex.tv cloud watchlist processing complete:")
-        logging.info(f"Total items in initial watchlist: {len(initial_watchlist)}")
-        logging.info(f"Items prepared for async fetch: {len(items_to_process_async)}")
+        elapsed = time.time() - overall_start_time
         logging.info(
-            f"Items successfully processed from async results: {len(all_fetched_items) - skipped_count - collected_skipped - removed_count}"
-        )
-        logging.info(f"Items skipped (no IMDB ID or fetch error): {skipped_count}")
-        logging.info(f"Items removed from watchlist: {removed_count}")
-        logging.info(f"Items skipped (already collected and kept): {collected_skipped}")
-        logging.info(
-            f"New items added to wanted list: {len(processed_items_for_current_run)}"
+            f"get_wanted_from_plex_watchlist completed in {elapsed:.4f} seconds"
         )
 
-        all_wanted_items.append((processed_items_for_current_run, versions))
-
-        overall_end_time = time.time()
-        logging.info(
-            f"get_wanted_from_plex_watchlist completed in {overall_end_time - overall_start_time:.4f} seconds."
-        )
-        return all_wanted_items
+        return [(wanted_items, versions)]
 
     except Exception as e:
-        logging.error(f"Error processing Plex watchlist: {e}", exc_info=True)
-        overall_end_time = time.time()
+        elapsed = time.time() - overall_start_time
         logging.error(
-            f"get_wanted_from_plex_watchlist failed after {overall_end_time - overall_start_time:.4f} seconds due to: {e}"
+            f"Error processing Plex watchlist after {elapsed:.4f} seconds: {e}",
+            exc_info=True,
         )
         return [([], versions)]
 
@@ -400,122 +315,92 @@ def get_wanted_from_plex_watchlist(
 def get_wanted_from_other_plex_watchlist(
     username: str, token: str, versions: Dict[str, bool]
 ) -> List[Tuple[List[Dict[str, Any]], Dict[str, bool]]]:
+    """
+    Retrieve and process another Plex user's watchlist.
+
+    Args:
+        username: Plex username to fetch watchlist for
+        token: Authentication token for the user
+        versions: Dictionary of version configurations
+
+    Returns:
+        List of tuples containing (wanted_items, versions)
+    """
     overall_start_time = time.time()
-    all_wanted_items = []
-    processed_items_for_current_run = []
 
     logging.info(f"Starting watchlist retrieval for other Plex user: {username}")
 
     try:
+        # Connect to Plex
         logging.info(f"Connecting to Plex.tv cloud service for user {username}")
-        client_start_time = time.time()
+        connect_start = time.time()
         account = MyPlexAccount(token=token)
-        client_end_time = time.time()
-        logging.info(
-            f"Plex client connection for user {username} took {client_end_time - client_start_time:.4f} seconds."
-        )
+        logging.info(f"Connection took {time.time() - connect_start:.4f} seconds")
 
         if not account:
             logging.error(
-                f"Could not connect to Plex.tv cloud service with provided token for user {username}"
+                f"Could not connect to Plex.tv cloud service for user {username}"
             )
             return [([], versions)]
 
+        # Verify username matches
         if account.username != username:
             logging.error(
-                f"Plex.tv cloud token for user {username} seems to belong to {account.username} (expected {username}). Aborting."
+                f"Token for user {username} belongs to {account.username}. Aborting"
             )
             return [([], versions)]
 
-        logging.info(
-            f"Fetching initial watchlist for user {username} from Plex.tv cloud service"
-        )
-        fetch_watchlist_start_time = time.time()
+        # Fetch watchlist
+        logging.info(f"Fetching watchlist for user {username}")
+        fetch_start = time.time()
         initial_watchlist = account.watchlist()
-        fetch_watchlist_end_time = time.time()
         logging.info(
-            f"Fetching initial watchlist for {username} from Plex API took {fetch_watchlist_end_time - fetch_watchlist_start_time:.4f} seconds. Found {len(initial_watchlist)} items."
+            f"Fetching watchlist took {time.time() - fetch_start:.4f} seconds. "
+            f"Found {len(initial_watchlist)} items"
         )
 
         if not initial_watchlist:
-            logging.info(f"Plex watchlist for user {username} is empty.")
+            logging.info(f"Plex watchlist for user {username} is empty")
             return [([], versions)]
 
-        # Initialize the detail cache for this specific user
-        other_detail_cache_file = os.path.join(
-            DB_CONTENT_DIR, f"plex_detail_cache_{username}.json"
-        )
-        # Initialize the detail cache
-        detail_cache = PlexDetailCache(DETAIL_CACHE_FILE, max_age_days=30)
+        # Fetch item details with user-specific cache
+        cache_file = os.path.join(DB_CONTENT_DIR, f"plex_detail_cache_{username}.json")
+        detail_cache = PlexDetailCache(cache_file, max_age_days=30)
         coordinator = WatchlistFetchCoordinator(detail_cache)
-
-        # Fetch all item details using cache when possible
         all_fetched_items, fetch_stats = coordinator.fetch_all_item_details(
             initial_watchlist, token
         )
 
         logging.info(
-            f"Fetched details for {fetch_stats['total_items']} items "
-            f"({fetch_stats['cache_hits']} from cache, {fetch_stats['fetched_count']} fetched)"
+            f"User {username}: Fetched details for {fetch_stats['total_items']} items "
+            f"({fetch_stats['cache_hits']} from cache, "
+            f"{fetch_stats['fetched_count']} fetched)"
         )
 
-        items_processed_count = 0
-        items_skipped_no_imdb = 0
-
-        for item_details in all_fetched_items:
-            original_plex_item = item_details["original_plex_item"]
-            title = original_plex_item.title
-
-            if item_details.get("error"):
-                logging.warning(
-                    f"User {username}: Skipping item '{title}' due to error during async fetch: {item_details['error']}"
-                )
-                items_skipped_no_imdb += 1
-                continue
-
-            imdb_id = item_details["imdb_id"]
-
-            if not imdb_id:
-                items_skipped_no_imdb += 1
-                logging.debug(
-                    f"User {username}: Skipping item '{title}' - no IMDB ID found after async fetch."
-                )
-                continue
-
-            media_type = (
-                item_details["media_type"]
-                if item_details["media_type"]
-                else original_plex_item.type
-            )
-            if media_type == "show":
-                media_type = "tv"
-
-            wanted_item = {
-                "imdb_id": imdb_id,
-                "media_type": media_type,
-                "content_source_detail": account.username,
-            }
-            processed_items_for_current_run.append(wanted_item)
-            items_processed_count += 1
-            logging.debug(
-                f"User {username}: Added '{title}' (IMDB: {imdb_id}, Type: {media_type}) to processed items."
-            )
+        # Process items into wanted list
+        processor = WatchlistItemProcessor(account, account.username)
+        wanted_items, process_stats = processor.process_items(all_fetched_items)
 
         logging.info(
-            f"User {username}: Retrieved {items_processed_count} wanted items from watchlist. Skipped {items_skipped_no_imdb} (no IMDB or fetch error)."
+            f"User {username}: Retrieved {process_stats['processed']} wanted items. "
+            f"Skipped {process_stats['skipped']} (no IMDB ID or error)"
         )
+
+        elapsed = time.time() - overall_start_time
+        logging.info(
+            f"get_wanted_from_other_plex_watchlist for user {username} "
+            f"completed in {elapsed:.4f} seconds"
+        )
+
+        return [(wanted_items, versions)]
 
     except Exception as e:
+        elapsed = time.time() - overall_start_time
         logging.error(
-            f"Error fetching {username}'s Plex watchlist: {str(e)}", exc_info=True
+            f"Error fetching {username}'s watchlist after {elapsed:.4f} seconds: {e}",
+            exc_info=True,
         )
         return [([], versions)]
-
-    all_wanted_items.append((processed_items_for_current_run, versions))
-    logging.info(
-        f"get_wanted_from_other_plex_watchlist for user {username} completed in {time.time() - overall_start_time:.4f} seconds."
-    )
-    return all_wanted_items
 
 
 def validate_plex_tokens():
