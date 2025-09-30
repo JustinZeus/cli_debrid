@@ -2160,7 +2160,6 @@ def print_version():
 
 if __name__ == "__main__":
     # Start tracemalloc only if explicitly enabled in settings to avoid the default overhead
-    print("TESTSETSETSETSETSE")
     if get_setting('Debug', 'enable_tracemalloc', False):
         tracemalloc.start()
     try:
