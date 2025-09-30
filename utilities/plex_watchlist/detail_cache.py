@@ -6,6 +6,8 @@ from typing import Dict, Optional, Any
 
 
 class PlexDetailCache:
+    """Cache for Plex watchlist item details (IMDB/TMDB IDs)."""
+
     def __init__(
         self, cache_file: str, max_age_days: int = 30, max_entries: int = 10000
     ):
@@ -13,6 +15,8 @@ class PlexDetailCache:
         self.max_age = timedelta(days=max_age_days)
         self.max_entries = max_entries
         self.cache = self._load_cache()
+        self._hits = 0
+        self._misses = 0
 
     def _load_cache(self) -> Dict:
         """Load cache from disk, return empty dict if file doesn't exist or is corrupted."""
@@ -22,7 +26,6 @@ class PlexDetailCache:
         try:
             with open(self.cache_file, "r") as f:
                 cache = json.load(f)
-                # Validate cache structure
                 if isinstance(cache, dict):
                     return cache
                 return {}
@@ -42,7 +45,6 @@ class PlexDetailCache:
     def _make_cache_key(self, item) -> Optional[str]:
         """Generate a unique cache key from a Plex item."""
         try:
-            # Use guid if available, otherwise use title + type as fallback
             if hasattr(item, "guid") and item.guid:
                 return item.guid
             elif hasattr(item, "title") and hasattr(item, "type"):
@@ -55,17 +57,19 @@ class PlexDetailCache:
         """Get cached details for an item if they exist and aren't expired."""
         cache_key = self._make_cache_key(item)
         if not cache_key:
+            self._misses += 1
             return None
 
         if cache_key in self.cache:
             entry = self.cache[cache_key]
-            # Check if entry is expired
             if "cached_at" in entry:
                 cached_time = datetime.fromisoformat(entry["cached_at"])
                 if datetime.now() - cached_time < self.max_age:
+                    self._hits += 1
                     return entry
-            # Expired or no timestamp, remove it
             del self.cache[cache_key]
+
+        self._misses += 1
         return None
 
     def set(self, item, details: Dict):
@@ -74,9 +78,7 @@ class PlexDetailCache:
         if not cache_key:
             return
 
-        # Enforce max entries limit (remove oldest entries if needed)
         if len(self.cache) >= self.max_entries:
-            # Remove 10% of oldest entries
             entries_to_remove = max(1, self.max_entries // 10)
             sorted_keys = sorted(
                 self.cache.keys(),
@@ -85,7 +87,6 @@ class PlexDetailCache:
             for key in sorted_keys[:entries_to_remove]:
                 del self.cache[key]
 
-        # Add timestamp to details
         details["cached_at"] = datetime.now().isoformat()
         self.cache[cache_key] = details
 
@@ -95,4 +96,17 @@ class PlexDetailCache:
 
     def stats(self) -> Dict:
         """Return cache statistics."""
-        return {"total_entries": len(self.cache), "cache_file": self.cache_file}
+        total = self._hits + self._misses
+        hit_rate = self._hits / total if total > 0 else 0
+        return {
+            "total_entries": len(self.cache),
+            "cache_file": self.cache_file,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": hit_rate,
+        }
+
+    def is_first_run(self, threshold: float = 0.1) -> bool:
+        """Check if this appears to be a first run based on cache hit rate."""
+        stats = self.stats()
+        return stats["hit_rate"] < threshold and stats["total_entries"] < 100
