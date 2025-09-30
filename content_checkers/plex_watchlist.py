@@ -1,156 +1,27 @@
 import logging
 import os
+import time
+from typing import List, Dict, Any, Tuple
 
-# --- Temporary logging setup for debugging the patch ---
-LOG_FLAG_PATCH = "[PLEX_PATCH_DEBUG]"
-patch_logger = logging.getLogger("plex_patch_debugger")
-patch_logger.setLevel(logging.INFO)
-log_dir_debug = os.environ.get("USER_LOGS", "/user/logs")
-os.makedirs(log_dir_debug, exist_ok=True)
-debug_log_path = os.path.join(log_dir_debug, "patch_debug.log")
-fh = logging.FileHandler(debug_log_path)
-fh.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-fh.setFormatter(formatter)
-patch_logger.addHandler(fh)
-patch_logger.propagate = False
+# Apply Plex API patches before importing plexapi
+from utilities.plex_api_patches import setup_plex_api_patches
 
-patch_logger.info(f"{LOG_FLAG_PATCH} Logger initialized in plex_watchlist.py")
-# --- End temporary logging setup ---
-
-patch_logger.info(
-    f"{LOG_FLAG_PATCH} Attempting to patch plexapi query methods for logging..."
-)
-try:
-    import plexapi.myplex
-
-    # Patch PlexServer.query
-    original_plexserver_query = plexapi.myplex.PlexServer.query
-
-    def patched_plexserver_query(
-        self, key, method=None, headers=None, params=None, timeout=None, **kwargs
-    ):
-        # Fix the endpoint URL if it's using the old metadata.provider.plex.tv
-        if "metadata.provider.plex.tv" in str(key):
-            fixed_key = str(key).replace(
-                "metadata.provider.plex.tv", "discover.provider.plex.tv"
-            )
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} PLEXSERVER QUERY: FIXED ENDPOINT - Original: {key} -> Fixed: {fixed_key}"
-            )
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} PLEXSERVER QUERY: method={method}, params={params}, kwargs={kwargs}"
-            )
-            return original_plexserver_query(
-                self, fixed_key, method, headers, params, timeout, **kwargs
-            )
-        else:
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} PLEXSERVER QUERY: key={key}, method={method}, params={params}, kwargs={kwargs}"
-            )
-            return original_plexserver_query(
-                self, key, method, headers, params, timeout, **kwargs
-            )
-
-    plexapi.myplex.PlexServer.query = patched_plexserver_query
-    patch_logger.info(
-        f"{LOG_FLAG_PATCH} SUCCESS: Patched plexapi.myplex.PlexServer.query to log requests."
-    )
-
-    # Patch MyPlexAccount.query
-    original_myplex_query = plexapi.myplex.MyPlexAccount.query
-
-    def patched_myplex_query(
-        self, url, method=None, headers=None, timeout=None, **kwargs
-    ):
-        # Fix the endpoint URL if it's using the old metadata.provider.plex.tv
-        if "metadata.provider.plex.tv" in url:
-            fixed_url = url.replace(
-                "metadata.provider.plex.tv", "discover.provider.plex.tv"
-            )
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} MYPLEX QUERY: FIXED ENDPOINT - Original: {url} -> Fixed: {fixed_url}"
-            )
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} MYPLEX QUERY: method={method}, kwargs={kwargs}"
-            )
-            return original_myplex_query(
-                self, fixed_url, method, headers, timeout, **kwargs
-            )
-        else:
-            patch_logger.info(
-                f"{LOG_FLAG_PATCH} MYPLEX QUERY: url={url}, method={method}, kwargs={kwargs}"
-            )
-            return original_myplex_query(self, url, method, headers, timeout, **kwargs)
-
-    plexapi.myplex.MyPlexAccount.query = patched_myplex_query
-    patch_logger.info(
-        f"{LOG_FLAG_PATCH} SUCCESS: Patched plexapi.myplex.MyPlexAccount.query to log requests."
-    )
-
-except (ImportError, AttributeError) as e:
-    patch_logger.error(
-        f"{LOG_FLAG_PATCH} FAILED: Could not patch plexapi query methods. Error: {e}",
-        exc_info=True,
-    )
-
-patch_logger.info(f"{LOG_FLAG_PATCH} plex_watchlist.py module execution continues...")
+setup_plex_api_patches()
 
 from plexapi.myplex import MyPlexAccount
-
-patch_logger.info(f"{LOG_FLAG_PATCH} Imported MyPlexAccount from plexapi.myplex.")
-
-from typing import List, Dict, Any, Tuple
 from utilities.settings import get_setting
-from database.database_reading import get_media_item_presence
 from queues.config_manager import load_config
-from cli_battery.app.trakt_metadata import TraktMetadata
-import os
-import pickle
-from datetime import datetime, timedelta
-from .plex_token_manager import update_token_status, get_token_status
-import time
-import aiohttp
-import asyncio
-import xml.etree.ElementTree as ET
+from .plex_token_manager import update_token_status
+
 from utilities.watchlist import (
     PlexDetailCache,
-    fetch_item_details_and_extract_ids,
-    run_async_fetches,
-    tmdb_to_imdb,
     WatchlistFetchCoordinator,
     WatchlistItemProcessor,
 )
 
 # Get db_content directory from environment variable with fallback
 DB_CONTENT_DIR = os.environ.get("USER_DB_CONTENT", "/user/db_content")
-PLEX_WATCHLIST_CACHE_FILE = os.path.join(DB_CONTENT_DIR, "plex_watchlist_cache.pkl")
-OTHER_PLEX_WATCHLIST_CACHE_FILE = os.path.join(
-    DB_CONTENT_DIR, "other_plex_watchlist_cache.pkl"
-)
 DETAIL_CACHE_FILE = os.path.join(DB_CONTENT_DIR, "plex_detail_cache.json")
-CACHE_EXPIRY_DAYS = 7
-
-
-def load_plex_cache(cache_file):
-    try:
-        if os.path.exists(cache_file):
-            with open(cache_file, "rb") as f:
-                return pickle.load(f)
-    except (EOFError, pickle.UnpicklingError, FileNotFoundError) as e:
-        logging.warning(
-            f"Error loading Plex watchlist cache: {e}. Creating a new cache."
-        )
-    return {}
-
-
-def save_plex_cache(cache, cache_file):
-    try:
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        with open(cache_file, "wb") as f:
-            pickle.dump(cache, f)
-    except Exception as e:
-        logging.error(f"Error saving Plex watchlist cache: {e}")
 
 
 def get_plex_client() -> tuple[Any, str] | tuple[None, None]:
@@ -197,36 +68,6 @@ def get_plex_client() -> tuple[Any, str] | tuple[None, None]:
             "seconds before failing"
         )
         return None, None
-
-
-def get_show_status(imdb_id: str) -> str:
-    """Get the status of a TV show from Trakt."""
-    start_time = time.time()
-    try:
-        trakt = TraktMetadata()
-        search_result = trakt._search_by_imdb(imdb_id)
-        if search_result and search_result["type"] == "show":
-            show = search_result["show"]
-            slug = show["ids"]["slug"]
-
-            # Get the full show data using the slug
-            url = f"{trakt.base_url}/shows/{slug}?extended=full"
-            response = trakt._make_request(url)
-            if response and response.status_code == 200:
-                show_data = response.json()
-                status = show_data.get("status", "").lower()
-                logging.debug(
-                    f"Getting show status for {imdb_id} took {time.time() - start_time:.4f} seconds. Status: {status}"
-                )
-                if status == "canceled":
-                    return "ended"
-                return status
-    except Exception as e:
-        logging.error(f"Error getting show status for {imdb_id}: {str(e)}")
-        logging.debug(
-            f"Getting show status for {imdb_id} took {time.time() - start_time:.4f} seconds before error."
-        )
-    return ""
 
 
 def get_wanted_from_plex_watchlist(
