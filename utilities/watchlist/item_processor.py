@@ -36,22 +36,24 @@ class WatchlistItemProcessor:
     def process_items(
         self, fetched_items: List[Dict[str, Any]]
     ) -> tuple[List[Dict[str, Any]], Dict[str, int]]:
-        """
-        Process fetched items into wanted items list.
-
-        Args:
-            fetched_items: List of items with details from fetch coordinator
-
-        Returns:
-            Tuple of (wanted_items_list, processing_stats)
-        """
+        """Process fetched items into wanted items list."""
         wanted_items = []
         stats = {"skipped": 0, "removed": 0, "collected_kept": 0, "processed": 0}
 
         start_time = time.time()
 
+        # Extract all IMDB IDs upfront
+        imdb_ids = [
+            item["imdb_id"]
+            for item in fetched_items
+            if item.get("imdb_id") and not item.get("error")
+        ]
+
+        # Single batch DB query for all presence checks
+        presence_map = self._get_batch_presence(imdb_ids)
+
         for item_details in fetched_items:
-            result = self._process_single_item(item_details, stats)
+            result = self._process_single_item(item_details, stats, presence_map)
             if result:
                 wanted_items.append(result)
 
@@ -64,7 +66,10 @@ class WatchlistItemProcessor:
         return wanted_items, stats
 
     def _process_single_item(
-        self, item_details: Dict[str, Any], stats: Dict[str, int]
+        self,
+        item_details: Dict[str, Any],
+        stats: Dict[str, int],
+        presence_map: Dict[str, str],
     ) -> Optional[Dict[str, Any]]:
         """Process a single item and return wanted item dict or None."""
         original_plex_item = item_details["original_plex_item"]
@@ -99,7 +104,7 @@ class WatchlistItemProcessor:
         media_type = self._normalize_media_type(media_type)
 
         # Check if item should be removed from watchlist
-        item_state = get_media_item_presence(imdb_id=imdb_id)
+        item_state = presence_map.get(imdb_id, "Not Found")
         logger.debug(f"Item '{title}' (IMDB: {imdb_id}) - Presence: {item_state}")
 
         if self._should_remove_item(item_state, media_type, imdb_id, title):
@@ -193,6 +198,22 @@ class WatchlistItemProcessor:
                 f"{time.time() - start_time:.4f} seconds before error."
             )
         return ""
+
+    def _get_batch_presence(self, imdb_ids: List[str]) -> Dict[str, str]:
+        """Batch query for media item presence."""
+        from database.database_reading import get_media_items_presence_batch
+
+        start = time.time()
+        try:
+            result = get_media_items_presence_batch(imdb_ids)
+            elapsed = time.time() - start
+            logger.info(
+                f"Batch presence check for {len(imdb_ids)} items completed in {elapsed:.3f}s"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Batch presence check failed: {e}")
+            return {}
 
     def _remove_from_watchlist(self, plex_item: Any, title: str, imdb_id: str) -> bool:
         """
